@@ -1,0 +1,48 @@
+name: Claude Code Review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'Model alias or id for --model (default: latest Sonnet)'
+        type: string
+        default: sonnet
+      prompt:
+        description: 'Override the review command; empty = default /code-review on the caller PR'
+        type: string
+        default: ''
+      review_label:
+        description: 'Label that triggers a review on labeled events'
+        type: string
+        default: claude-review
+    secrets:
+      claude_code_oauth_token:
+        required: true
+
+jobs:
+  claude-review:
+    # On `labeled` events only review when the label matches review_label;
+    # every other event (opened/synchronize/ready_for_review/reopened) always runs.
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name == inputs.review_label
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: ${{ inputs.prompt != '' && inputs.prompt || format('/code-review:code-review {0}/pull/{1}', github.repository, github.event.pull_request.number) }}
+          claude_args: '--model ${{ inputs.model }}'

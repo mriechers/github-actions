@@ -1,0 +1,44 @@
+name: Claude Code (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'Model alias or id for --model (default: latest Sonnet)'
+        type: string
+        default: sonnet
+      claude_args:
+        description: 'Extra args appended after --model (e.g. --allowed-tools ...)'
+        type: string
+        default: ''
+    secrets:
+      claude_code_oauth_token:
+        required: true
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          claude_args: ${{ format('--model {0} {1}', inputs.model, inputs.claude_args) }}
+          additional_permissions: |
+            actions: read
