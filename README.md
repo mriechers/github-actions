@@ -29,7 +29,7 @@ jobs:
       pull-requests: read
       issues: read
       id-token: write
-    uses: mriechers/github-actions/.github/workflows/claude-review.yml@v1
+    uses: mriechers/github-actions/.github/workflows/claude-review.yml@689b8174f7a885dc201556aa56bf862bd2623207  # v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -38,14 +38,20 @@ The `permissions:` block must live in the caller: a reusable can only *downgrade
 the token it is handed, and a repo whose default token is read-only would
 otherwise strip the interactive job's write access.
 
-## Releasing (`@v1`)
+## Releasing (SHA-pinned)
 
-The fleet pins `@v1` (a moving major tag). To ship a change: commit to `main`,
-verify on a canary repo, then move the tag:
+Consumers pin a full commit **SHA** (with a `# v1` comment), **not** the moving
+tag — an unpinned third-party ref is a supply-chain risk and would let a bad push
+hit every consumer at once. To ship a change:
 
-```bash
-git tag -f v1 && git push -f origin v1
-```
+1. Commit it to `main` here (and verify).
+2. Optionally move the `v1` tag to the new commit as a human-readable pointer:
+   `git tag -f v1 && git push -f origin v1`.
+3. Re-pin the fleet: in `the-lodge`, bump the SHA in the two stub files under
+   `scripts/claude-workflow-migration/stubs/`, then re-run `sweep.sh`. Its
+   skip-check matches the target SHA, so repos on the old SHA update and current
+   ones skip. **The sweep is the propagation/bump tool — no Dependabot needed.**
 
-Rollback = move `v1` back to the prior good SHA. Breaking changes get a new
-`v2` tag and a deliberate fleet re-point.
+Rollback = re-pin the fleet to the prior good SHA and re-run the sweep. Moving the
+tag alone does nothing (consumers pin the SHA), and a bad reusable never reaches
+the fleet until a deliberate re-pin — that gap *is* the safety.
