@@ -7,10 +7,6 @@ on:
         description: 'Model alias or id for --model (default: latest Sonnet)'
         type: string
         default: sonnet
-      prompt:
-        description: 'Override the review command; empty = default /code-review on the caller PR'
-        type: string
-        default: ''
       review_label:
         description: 'Label that triggers a review on labeled events'
         type: string
@@ -51,9 +47,10 @@ jobs:
             You are the authoritative reviewer for ${{ github.repository }} PR #${{ github.event.pull_request.number }}.
 
             1. Ensure these labels exist in the repo; create any missing one with
-               `gh label create <name> --color <color> --description <desc> --force`:
-               review:new, review:re-review, review:blocker, review:nits,
-               review:approved, ship:ready (colors per the pr-review taxonomy).
+               `gh label create <name> --color <hex> --description <desc> --force`
+               using these exact hex colors:
+               review:new=0e8a16, review:re-review=1d76db, review:blocker=b60205,
+               review:nits=fbca04, review:approved=0e8a16, ship:ready=5319e7.
             2. If the PR has NO review:* label yet, add `review:new` now.
             3. Run `/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}`
                and POST the findings as a summary review comment on the PR.
