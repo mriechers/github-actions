@@ -1,4 +1,5 @@
 .DS_Store
+
+# Personal, per-machine Claude Code settings. The shared project loadout and the
+# actionlint hook live in .claude/settings.json and are tracked.
 .claude/settings.local.json
-__pycache__/
-*.pyc

@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/actionlint-workflow.sh",
+            "timeout": 30,
+            "statusMessage": "Linting workflow with actionlint..."
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "huggingface-skills@claude-plugins-official": false,
+    "obsidian@obsidian-para-skills": false,
+    "hardware@mriechers-marketplace": false,
+    "writing-research@mriechers-marketplace": false,
+    "knowledge@mriechers-marketplace": false,
+    "docx@vetted-skills": false,
+    "pptx@vetted-skills": false,
+    "pdf@vetted-skills": false,
+    "pbswi-content@public-media-work-marketplace": false,
+    "playground@claude-plugins-official": false,
+    "frontend-design@claude-plugins-official": false
+  }
+}
