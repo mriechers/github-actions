@@ -153,13 +153,14 @@ jobs:
             - `request_changes`: at least one must-fix blocker; formal REQUEST_CHANGES.
             - `comment`: only nits or uncertainty; a formal COMMENT, never approval.
 
-            Then write exactly one UTF-8 JSON object to
-            `claude-review-result.json` in the repository workspace:
-            {"verdict":"approve|request_changes|comment","summary":"concise Markdown review summary"}
-            The summary must explain findings and, for blockers, include actionable
-            file/line references when available. Do not include labels in the JSON:
-            the deterministic publisher owns GitHub-visible label state.
-          claude_args: '--model ${{ inputs.model }}'
+            Return the validated structured output required by the supplied JSON
+            schema. Its summary must be concise Markdown that explains findings and,
+            for blockers, includes actionable file/line references when available.
+            Do not include labels: the deterministic publisher owns GitHub-visible
+            label state.
+          claude_args: >-
+            --model ${{ inputs.model }} --json-schema
+            '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes","comment"]},"summary":{"type":"string","minLength":1}},"required":["verdict","summary"],"additionalProperties":false}'
 
       - name: Validate machine-readable review result
         id: review-result
@@ -167,7 +168,7 @@ jobs:
           steps.publication-eligibility.outputs.publish == 'true' &&
           steps.review-context.outputs.claude_configured == 'true'
         env:
-          RESULT_FILE: claude-review-result.json
+          STRUCTURED_OUTPUT: ${{ steps.claude-review.outputs.structured_output }}
         run: |
           python3 - <<'PY'
           import json
@@ -175,15 +176,15 @@ jobs:
           import sys
           import uuid
 
-          result_file = os.environ["RESULT_FILE"]
           try:
-              with open(result_file, encoding="utf-8") as file:
-                  result = json.load(file)
-          except (OSError, json.JSONDecodeError) as error:
-              sys.exit(f"Claude did not produce valid {result_file}: {error}")
+              result = json.loads(os.environ["STRUCTURED_OUTPUT"])
+          except json.JSONDecodeError as error:
+              sys.exit(f"Claude did not produce valid structured output: {error}")
 
           if not isinstance(result, dict):
-              sys.exit("Claude review result must be a JSON object")
+              sys.exit("Claude structured output must be a JSON object")
+          if set(result) != {"verdict", "summary"}:
+              sys.exit("Claude structured output must contain only verdict and summary")
 
           verdict = result.get("verdict")
           summary = result.get("summary")
@@ -203,9 +204,9 @@ jobs:
               "comment": "neutral",
           }
           if verdict not in labels:
-              sys.exit("Claude review verdict must be approve, request_changes, or comment")
+              sys.exit("Claude structured output verdict must be approve, request_changes, or comment")
           if not isinstance(summary, str) or not summary.strip():
-              sys.exit("Claude review summary must be a non-empty string")
+              sys.exit("Claude structured output summary must be a non-empty string")
 
           summary = summary.strip()
           if len(summary) > 60000:

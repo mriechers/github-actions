@@ -72,9 +72,10 @@ Store its numeric ID in `REVIEW_APP_ID` and its PEM private key in
 `REVIEW_APP_PRIVATE_KEY`. The App token is optional: existing OAuth-only callers
 need no changes and use the caller's `GITHUB_TOKEN` for GitHub API publishing.
 
-Claude writes a constrained JSON verdict; the workflow validates it and
-deterministically publishes one formal review and one check run. `approve`
-becomes `review:approved`/`APPROVE`, blockers become
+Claude Code Action returns a constrained structured JSON verdict through its
+`structured_output` output, validated with `--json-schema`; the workflow
+parses it and deterministically publishes one formal review and one check run.
+`approve` becomes `review:approved`/`APPROVE`, blockers become
 `review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty become
 `review:nits`/`COMMENT`. It creates the review taxonomy labels if absent and
 keeps exactly one `review:*` state label; it never changes `ship:ready` or
