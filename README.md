@@ -10,7 +10,7 @@ shared workflow.
 
 | File | Purpose | Key inputs |
 |---|---|---|
-| `.github/workflows/claude-review.yml` | Auto Claude review of every PR | `model` (default `sonnet`), `prompt`, `review_label` |
+| `.github/workflows/claude-review.yml` | Auto Claude review with formal GitHub state | `model` (default `sonnet`), `prompt`, `review_label`, optional `github_app_id` |
 | `.github/workflows/claude-interactive.yml` | Interactive `@claude` on issues/PRs | `model` (default `sonnet`), `claude_args` |
 
 ## Consuming
@@ -21,22 +21,82 @@ Add a caller workflow that forwards the token and grants permissions, e.g.:
 name: Claude Code Review
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened, labeled]
+    types: [opened, ready_for_review, reopened, labeled]
 jobs:
   review:
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      checks: write
+      pull-requests: write
+      issues: write
       id-token: write
     uses: mriechers/github-actions/.github/workflows/claude-review.yml@689b8174f7a885dc201556aa56bf862bd2623207  # v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-The `permissions:` block must live in the caller: a reusable can only *downgrade*
-the token it is handed, and a repo whose default token is read-only would
-otherwise strip the interactive job's write access.
+The reusable only accepts `opened`, `ready_for_review`, `reopened`, and a
+`labeled` event whose label matches `review_label` (default `claude-review`).
+It serializes runs per PR. The `permissions:` block must live in the caller: a
+reusable can only *downgrade* the token it is handed. `id-token: write` is
+required by `anthropics/claude-code-action` to obtain its OIDC token.
+
+### GitHub App publishing (recommended)
+
+To publish the formal review, check run, and review labels as an organization
+GitHub App rather than `github-actions[bot]`, create an installation token in
+the reusable:
+
+```yaml
+jobs:
+  review:
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: mriechers/github-actions/.github/workflows/claude-review.yml@<FULL_COMMIT_SHA>  # v1
+    with:
+      github_app_id: ${{ vars.REVIEW_APP_ID }}
+      review_label: claude-review
+      # prompt: Focus on public API compatibility and database migrations.
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      github_app_private_key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+```
+
+Install the App on each target repository with **Contents: read**, **Pull
+requests: read/write**, **Issues: read/write**, and **Checks: read/write**.
+Store its numeric ID in `REVIEW_APP_ID` and its PEM private key in
+`REVIEW_APP_PRIVATE_KEY`. The App token is optional: existing OAuth-only callers
+need no changes and use the caller's `GITHUB_TOKEN` for GitHub API publishing.
+
+Claude writes a constrained JSON verdict; the workflow validates it and
+deterministically publishes one formal review and one check run. `approve`
+becomes `review:approved`/`APPROVE`, blockers become
+`review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty become
+`review:nits`/`COMMENT`. It creates the review taxonomy labels if absent and
+keeps exactly one `review:*` state label; it never changes `ship:ready` or
+merges a PR. Before invoking Claude, it checks the PR head for a completed
+`Claude autonomous review` check; an existing check skips publication and adds
+an explicit job-summary message, preventing duplicate same-head reviews.
+
+Fork PRs are always **report-only**. They never mint or expose the App token
+and never check out fork code or receive the OAuth secret. The separate
+read-only job never publishes reviews, check runs, or labels; it only records a
+report-only summary. Same-repository checkouts disable persisted credentials,
+and Claude is instructed not to execute PR code.
+
+### Canary rollout
+
+1. Create a test PR in one non-critical repository and call a full SHA of this
+   workflow with the App ID and private-key secret.
+2. Confirm the formal review, `Claude autonomous review` check, and exactly one
+   `review:*` label were authored by the App installation.
+3. Exercise the `claude-review` label trigger, then test a fork PR and confirm
+   it is report-only.
+4. Only then re-pin additional callers to the verified full SHA.
 
 ## Releasing (SHA-pinned)
 
