@@ -71,14 +71,17 @@ requests: read/write**, **Issues: read/write**, and **Checks: read/write**.
 Store its numeric ID in `REVIEW_APP_ID` and its PEM private key in
 `REVIEW_APP_PRIVATE_KEY`. The App token is optional: existing OAuth-only callers
 need no changes and use the caller's `GITHUB_TOKEN` for GitHub API publishing.
+If the App is not installed for the repository or token minting otherwise fails,
+the workflow records a warning and falls back to `GITHUB_TOKEN`.
 
 Claude Code Action returns a constrained structured JSON verdict through its
 `structured_output` output, validated with `--json-schema`; the workflow
 parses it and deterministically publishes one formal review and one check run.
-With GitHub App credentials, `approve` becomes `review:approved`/`APPROVE`.
-Without them, GitHub Actions cannot approve a pull request, so the fallback
-publishes a `COMMENT` with an explicit downgrade note while retaining the
-`review:approved` label and successful check. Blockers remain
+Only a successfully minted GitHub App installation token makes `approve`
+become `review:approved`/`APPROVE`. GitHub Actions cannot approve a pull
+request, so a missing or failed App token falls back to a `COMMENT` with an
+explicit downgrade note while retaining the `review:approved` label and
+successful check. Blockers remain
 `review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty remain
 `review:nits`/`COMMENT`. It creates the review taxonomy labels if absent and
 keeps exactly one `review:*` state label; it never changes `ship:ready` or
