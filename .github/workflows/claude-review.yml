@@ -8,41 +8,106 @@ on:
         type: string
         default: sonnet
       prompt:
-        description: 'Override the review command; empty = default /code-review on the caller PR'
+        description: 'Additional or replacement review instructions; empty uses the standard review'
         type: string
         default: ''
       review_label:
         description: 'Label that triggers a review on labeled events'
         type: string
         default: claude-review
+      github_app_id:
+        description: 'Optional GitHub App ID used to publish the native review state'
+        type: string
+        default: ''
     secrets:
       claude_code_oauth_token:
         required: true
+      github_app_private_key:
+        required: false
+    outputs:
+      review_verdict:
+        description: 'Machine-readable review verdict: approve, request_changes, or comment'
+        value: ${{ jobs.claude-review.outputs.review_verdict }}
+      review_label:
+        description: 'Machine-readable final review label'
+        value: ${{ jobs.claude-review.outputs.review_label }}
+      review_mode:
+        description: 'publish for same-repository PRs, report-only for fork PRs'
+        value: ${{ jobs.claude-review.outputs.review_mode || jobs.fork-report.outputs.review_mode }}
 
 jobs:
   claude-review:
-    # On `labeled` events only review when the label matches review_label;
-    # every other event (opened/synchronize/ready_for_review/reopened) always runs.
+    # Callers choose the event trigger, but this reusable accepts only the review
+    # lifecycle events and its configured manual label.
     if: >-
-      github.event.action != 'labeled' ||
-      github.event.label.name == inputs.review_label
+      github.event_name == 'pull_request' &&
+      (
+        github.event.action == 'opened' ||
+        github.event.action == 'ready_for_review' ||
+        github.event.action == 'reopened' ||
+        (github.event.action == 'labeled' && github.event.label.name == inputs.review_label)
+      ) &&
+      github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: read
+      checks: write
       pull-requests: write
       issues: write
-      id-token: write
+    outputs:
+      review_verdict: ${{ steps.review-result.outputs.verdict }}
+      review_label: ${{ steps.review-result.outputs.label }}
+      review_mode: ${{ steps.review-context.outputs.mode }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Determine review mode and available credentials
+        id: review-context
+        env:
+          APP_ID: ${{ inputs.github_app_id }}
+          APP_PRIVATE_KEY: ${{ secrets.github_app_private_key }}
+          CLAUDE_TOKEN: ${{ secrets.claude_code_oauth_token }}
+        run: |
+          echo "mode=publish" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo "app_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -n "$CLAUDE_TOKEN" ]; then
+            echo "claude_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "claude_configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App installation token
+        id: app-token
+        if: steps.review-context.outputs.app_configured == 'true'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec4942e1d4e84 # v2
+        with:
+          app-id: ${{ inputs.github_app_id }}
+          private-key: ${{ secrets.github_app_private_key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout pull request
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
+          persist-credentials: false
+
       - name: Run Claude Code Review
         id: claude-review
+        if: steps.review-context.outputs.claude_configured == 'true'
         uses: anthropics/claude-code-action@v1
+        env:
+          # The App token takes precedence when configured, so all gh calls made
+          # by the action use the App identity. Forks never receive an App token.
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          REVIEW_MODE: ${{ steps.review-context.outputs.mode }}
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
@@ -50,17 +115,201 @@ jobs:
           prompt: |
             You are the authoritative reviewer for ${{ github.repository }} PR #${{ github.event.pull_request.number }}.
 
-            1. Ensure these labels exist in the repo; create any missing one with
-               `gh label create <name> --color <color> --description <desc> --force`:
-               review:new, review:re-review, review:blocker, review:nits,
-               review:approved, ship:ready (colors per the pr-review taxonomy).
-            2. If the PR has NO review:* label yet, add `review:new` now.
-            3. Run `/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}`
-               and POST the findings as a summary review comment on the PR.
-            4. From the verdict, apply EXACTLY ONE label and remove the other four
-               review:* labels (review:new/re-review/blocker/nits/approved):
-                 - clean / no actionable findings  -> review:approved
-                 - only minor / nit findings        -> review:nits
-                 - any must-fix finding             -> review:blocker
-               Never touch ship:ready, claude-fix, or no-pr-watch.
+            Review the PR diff and relevant repository context. Do not run PR code,
+            install dependencies, modify repository files (except the required result
+            file below), or use `gh`/GitHub APIs to create reviews, comments, labels,
+            checks, or merge PRs. Never merge a PR.
+
+            Use the code-review plugin and these caller-supplied review instructions:
+            ${{ inputs.prompt }}
+
+            Decide exactly one verdict:
+            - `approve`: no actionable findings; a formal APPROVE is appropriate.
+            - `request_changes`: at least one must-fix blocker; formal REQUEST_CHANGES.
+            - `comment`: only nits or uncertainty; a formal COMMENT, never approval.
+
+            Then write exactly one UTF-8 JSON object to
+            `claude-review-result.json` in the repository workspace:
+            {"verdict":"approve|request_changes|comment","summary":"concise Markdown review summary"}
+            The summary must explain findings and, for blockers, include actionable
+            file/line references when available. Do not include labels in the JSON:
+            the deterministic publisher owns GitHub-visible label state.
           claude_args: '--model ${{ inputs.model }}'
+
+      - name: Validate machine-readable review result
+        id: review-result
+        if: steps.review-context.outputs.claude_configured == 'true'
+        env:
+          RESULT_FILE: claude-review-result.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import uuid
+
+          result_file = os.environ["RESULT_FILE"]
+          try:
+              with open(result_file, encoding="utf-8") as file:
+                  result = json.load(file)
+          except (OSError, json.JSONDecodeError) as error:
+              sys.exit(f"Claude did not produce valid {result_file}: {error}")
+
+          if not isinstance(result, dict):
+              sys.exit("Claude review result must be a JSON object")
+
+          verdict = result.get("verdict")
+          summary = result.get("summary")
+          labels = {
+              "approve": "review:approved",
+              "request_changes": "review:blocker",
+              "comment": "review:nits",
+          }
+          events = {
+              "approve": "APPROVE",
+              "request_changes": "REQUEST_CHANGES",
+              "comment": "COMMENT",
+          }
+          conclusions = {
+              "approve": "success",
+              "request_changes": "failure",
+              "comment": "neutral",
+          }
+          if verdict not in labels:
+              sys.exit("Claude review verdict must be approve, request_changes, or comment")
+          if not isinstance(summary, str) or not summary.strip():
+              sys.exit("Claude review summary must be a non-empty string")
+
+          summary = summary.strip()
+          if len(summary) > 60000:
+              sys.exit("Claude review summary exceeds 60000 characters")
+
+          publication = {
+              "event": events[verdict],
+              "label": labels[verdict],
+              "summary": summary,
+              "check_conclusion": conclusions[verdict],
+          }
+          with open("claude-review-publication.json", "w", encoding="utf-8") as file:
+              json.dump(publication, file)
+
+          delimiter = f"review-{uuid.uuid4()}"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"verdict={verdict}\n")
+              output.write(f"label={labels[verdict]}\n")
+              output.write(f"summary<<{delimiter}\n{summary}\n{delimiter}\n")
+          PY
+
+      - name: Publish formal review, check, and labels
+        if: >-
+          steps.review-context.outputs.mode == 'publish' &&
+          steps.review-context.outputs.claude_configured == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_EVENT: ${{ steps.review-result.outputs.verdict }}
+          REVIEW_LABEL: ${{ steps.review-result.outputs.label }}
+        run: |
+          case "$REVIEW_EVENT" in
+            approve)
+              REVIEW_API_EVENT=APPROVE
+              CHECK_CONCLUSION=success
+              ;;
+            request_changes)
+              REVIEW_API_EVENT=REQUEST_CHANGES
+              CHECK_CONCLUSION=failure
+              ;;
+            comment)
+              REVIEW_API_EVENT=COMMENT
+              CHECK_CONCLUSION=neutral
+              ;;
+            *)
+              echo "Unsupported validated review verdict: $REVIEW_EVENT" >&2
+              exit 1
+              ;;
+          esac
+          export REVIEW_API_EVENT CHECK_CONCLUSION
+
+          gh label create review:new --color 0E8A16 --description "New PR awaiting review" --force
+          gh label create review:re-review --color FBCA04 --description "Changes need another review" --force
+          gh label create review:blocker --color D73A4A --description "Review found must-fix blockers" --force
+          gh label create review:nits --color C5DEF5 --description "Review found only nits or uncertainty" --force
+          gh label create review:approved --color 0E8A16 --description "Review approved with no actionable findings" --force
+
+          gh pr edit "$PR_NUMBER" --add-label "$REVIEW_LABEL"
+          for label in review:new review:re-review review:blocker review:nits review:approved; do
+            if [ "$label" != "$REVIEW_LABEL" ]; then
+              gh pr edit "$PR_NUMBER" --remove-label "$label" || true
+            fi
+          done
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("claude-review-publication.json", encoding="utf-8") as file:
+              publication = json.load(file)
+
+          with open("claude-review-request.json", "w", encoding="utf-8") as file:
+              json.dump(
+                  {
+                      "body": publication["summary"],
+                      "event": os.environ["REVIEW_API_EVENT"],
+                  },
+                  file,
+              )
+
+          with open("claude-review-check.json", "w", encoding="utf-8") as file:
+              json.dump(
+                  {
+                      "name": "Claude autonomous review",
+                      "head_sha": os.environ["PR_HEAD_SHA"],
+                      "status": "completed",
+                      "conclusion": os.environ["CHECK_CONCLUSION"],
+                      "output": {
+                          "title": f"Review: {os.environ['REVIEW_EVENT']}",
+                          "summary": publication["summary"],
+                      },
+                  },
+                  file,
+              )
+          PY
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            --input claude-review-request.json
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            --input claude-review-check.json
+          rm -f claude-review-publication.json claude-review-request.json claude-review-check.json
+
+  fork-report:
+    # A separate read-only job ensures a repository setting cannot accidentally
+    # expose a write-capable token while handling untrusted fork PR content.
+    if: >-
+      github.event_name == 'pull_request' &&
+      (
+        github.event.action == 'opened' ||
+        github.event.action == 'ready_for_review' ||
+        github.event.action == 'reopened' ||
+        (github.event.action == 'labeled' && github.event.label.name == inputs.review_label)
+      ) &&
+      github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      review_mode: ${{ steps.report-mode.outputs.mode }}
+    steps:
+      - name: Record report-only mode
+        id: report-mode
+        run: |
+          echo "mode=report-only" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Claude review: report-only"
+            echo "This is a fork PR. It was not checked out and no OAuth or GitHub App token,"
+            echo "formal review, check run, or labels were published."
+          } >> "$GITHUB_STEP_SUMMARY"
