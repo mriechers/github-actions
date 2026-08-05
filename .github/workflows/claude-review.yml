@@ -86,7 +86,7 @@ jobs:
       - name: Create GitHub App installation token
         id: app-token
         if: steps.review-context.outputs.app_configured == 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec4942e1d4e84 # v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.github_app_id }}
           private-key: ${{ secrets.github_app_private_key }}
