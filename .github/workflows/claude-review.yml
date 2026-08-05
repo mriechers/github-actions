@@ -239,26 +239,35 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_EVENT: ${{ steps.review-result.outputs.verdict }}
           REVIEW_LABEL: ${{ steps.review-result.outputs.label }}
+          HAS_APP_TOKEN: ${{ steps.app-token.outputs.token != '' }}
         run: |
           case "$REVIEW_EVENT" in
             approve)
-              REVIEW_API_EVENT=APPROVE
               CHECK_CONCLUSION=success
+              if [ "$HAS_APP_TOKEN" = "true" ]; then
+                REVIEW_API_EVENT=APPROVE
+                CLEAN_APPROVAL_NOTE=
+              else
+                REVIEW_API_EVENT=COMMENT
+                CLEAN_APPROVAL_NOTE="Clean verdict: formal approval was not submitted because GitHub App credentials are not configured; review:approved and this successful check record the result."
+              fi
               ;;
             request_changes)
               REVIEW_API_EVENT=REQUEST_CHANGES
               CHECK_CONCLUSION=failure
+              CLEAN_APPROVAL_NOTE=
               ;;
             comment)
               REVIEW_API_EVENT=COMMENT
               CHECK_CONCLUSION=neutral
+              CLEAN_APPROVAL_NOTE=
               ;;
             *)
               echo "Unsupported validated review verdict: $REVIEW_EVENT" >&2
               exit 1
               ;;
           esac
-          export REVIEW_API_EVENT CHECK_CONCLUSION
+          export REVIEW_API_EVENT CHECK_CONCLUSION CLEAN_APPROVAL_NOTE
 
           gh label create review:new --color ededed --description "Awaiting first review" --force
           gh label create review:re-review --color 1d76db --description "Fixes pushed — awaiting re-review" --force
@@ -280,10 +289,14 @@ jobs:
           with open("claude-review-publication.json", encoding="utf-8") as file:
               publication = json.load(file)
 
+          review_body = publication["summary"]
+          if os.environ["CLEAN_APPROVAL_NOTE"]:
+              review_body = f"{review_body}\n\n{os.environ['CLEAN_APPROVAL_NOTE']}"
+
           with open("claude-review-request.json", "w", encoding="utf-8") as file:
               json.dump(
                   {
-                      "body": publication["summary"],
+                      "body": review_body,
                       "event": os.environ["REVIEW_API_EVENT"],
                   },
                   file,

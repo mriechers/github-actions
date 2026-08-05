@@ -75,8 +75,11 @@ need no changes and use the caller's `GITHUB_TOKEN` for GitHub API publishing.
 Claude Code Action returns a constrained structured JSON verdict through its
 `structured_output` output, validated with `--json-schema`; the workflow
 parses it and deterministically publishes one formal review and one check run.
-`approve` becomes `review:approved`/`APPROVE`, blockers become
-`review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty become
+With GitHub App credentials, `approve` becomes `review:approved`/`APPROVE`.
+Without them, GitHub Actions cannot approve a pull request, so the fallback
+publishes a `COMMENT` with an explicit downgrade note while retaining the
+`review:approved` label and successful check. Blockers remain
+`review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty remain
 `review:nits`/`COMMENT`. It creates the review taxonomy labels if absent and
 keeps exactly one `review:*` state label; it never changes `ship:ready` or
 merges a PR. Before invoking Claude, it checks the PR head for a completed
