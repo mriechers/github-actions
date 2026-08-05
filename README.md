@@ -75,7 +75,9 @@ becomes `review:approved`/`APPROVE`, blockers become
 `review:blocker`/`REQUEST_CHANGES`, and nits or uncertainty become
 `review:nits`/`COMMENT`. It creates the review taxonomy labels if absent and
 keeps exactly one `review:*` state label; it never changes `ship:ready` or
-merges a PR.
+merges a PR. Before invoking Claude, it checks the PR head for a completed
+`Claude autonomous review` check; an existing check skips publication and adds
+an explicit job-summary message, preventing duplicate same-head reviews.
 
 Fork PRs are always **report-only**. They never mint or expose the App token
 and never check out fork code or receive the OAuth secret. The separate

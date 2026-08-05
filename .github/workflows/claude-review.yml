@@ -92,7 +92,29 @@ jobs:
           private-key: ${{ secrets.github_app_private_key }}
           owner: ${{ github.repository_owner }}
 
+      - name: Skip an already-reviewed head
+        id: publication-eligibility
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          completed_runs="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?check_name=Claude%20autonomous%20review&status=completed&per_page=1" \
+            --jq '.total_count')"
+
+          if [ "$completed_runs" -gt 0 ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Claude review: skipped"
+              echo "A completed \`Claude autonomous review\` check already exists for head \`${PR_HEAD_SHA}\`."
+              echo "No duplicate formal review, labels, or check run was published."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout pull request
+        if: steps.publication-eligibility.outputs.publish == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
@@ -100,7 +122,9 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        if: steps.review-context.outputs.claude_configured == 'true'
+        if: >-
+          steps.publication-eligibility.outputs.publish == 'true' &&
+          steps.review-context.outputs.claude_configured == 'true'
         uses: anthropics/claude-code-action@v1
         env:
           # The App token takes precedence when configured, so all gh calls made
@@ -138,7 +162,9 @@ jobs:
 
       - name: Validate machine-readable review result
         id: review-result
-        if: steps.review-context.outputs.claude_configured == 'true'
+        if: >-
+          steps.publication-eligibility.outputs.publish == 'true' &&
+          steps.review-context.outputs.claude_configured == 'true'
         env:
           RESULT_FILE: claude-review-result.json
         run: |
@@ -203,6 +229,7 @@ jobs:
       - name: Publish formal review, check, and labels
         if: >-
           steps.review-context.outputs.mode == 'publish' &&
+          steps.publication-eligibility.outputs.publish == 'true' &&
           steps.review-context.outputs.claude_configured == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
@@ -231,11 +258,11 @@ jobs:
           esac
           export REVIEW_API_EVENT CHECK_CONCLUSION
 
-          gh label create review:new --color 0E8A16 --description "New PR awaiting review" --force
-          gh label create review:re-review --color FBCA04 --description "Changes need another review" --force
-          gh label create review:blocker --color D73A4A --description "Review found must-fix blockers" --force
-          gh label create review:nits --color C5DEF5 --description "Review found only nits or uncertainty" --force
-          gh label create review:approved --color 0E8A16 --description "Review approved with no actionable findings" --force
+          gh label create review:new --color ededed --description "Awaiting first review" --force
+          gh label create review:re-review --color 1d76db --description "Fixes pushed — awaiting re-review" --force
+          gh label create review:blocker --color b60205 --description "Review done — must-fix changes requested" --force
+          gh label create review:nits --color fbca04 --description "Review done — only minor/nit findings" --force
+          gh label create review:approved --color 0e8a16 --description "Review done — clean, no changes needed" --force
 
           gh pr edit "$PR_NUMBER" --add-label "$REVIEW_LABEL"
           for label in review:new review:re-review review:blocker review:nits review:approved; do
