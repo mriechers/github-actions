@@ -29,6 +29,7 @@ jobs:
       checks: write
       pull-requests: write
       issues: write
+      id-token: write
     uses: mriechers/github-actions/.github/workflows/claude-review.yml@689b8174f7a885dc201556aa56bf862bd2623207  # v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -37,7 +38,8 @@ jobs:
 The reusable only accepts `opened`, `ready_for_review`, `reopened`, and a
 `labeled` event whose label matches `review_label` (default `claude-review`).
 It serializes runs per PR. The `permissions:` block must live in the caller: a
-reusable can only *downgrade* the token it is handed.
+reusable can only *downgrade* the token it is handed. `id-token: write` is
+required by `anthropics/claude-code-action` to obtain its OIDC token.
 
 ### GitHub App publishing (recommended)
 
@@ -53,6 +55,7 @@ jobs:
       checks: write
       pull-requests: write
       issues: write
+      id-token: write
     uses: mriechers/github-actions/.github/workflows/claude-review.yml@<FULL_COMMIT_SHA>  # v1
     with:
       github_app_id: ${{ vars.REVIEW_APP_ID }}

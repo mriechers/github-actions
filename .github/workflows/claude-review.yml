@@ -57,6 +57,7 @@ jobs:
       checks: write
       pull-requests: write
       issues: write
+      id-token: write
     outputs:
       review_verdict: ${{ steps.review-result.outputs.verdict }}
       review_label: ${{ steps.review-result.outputs.label }}
