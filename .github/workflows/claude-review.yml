@@ -87,16 +87,37 @@ jobs:
       - name: Create GitHub App installation token
         id: app-token
         if: steps.review-context.outputs.app_configured == 'true'
+        continue-on-error: true
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.github_app_id }}
           private-key: ${{ secrets.github_app_private_key }}
           owner: ${{ github.repository_owner }}
 
+      - name: Determine GitHub API token mode
+        id: app-token-context
+        env:
+          APP_CONFIGURED: ${{ steps.review-context.outputs.app_configured }}
+          APP_TOKEN_OUTCOME: ${{ steps.app-token.outcome }}
+          APP_TOKEN: ${{ steps.app-token.outcome == 'success' && steps.app-token.outputs.token || '' }}
+        run: |
+          if [ "$APP_TOKEN_OUTCOME" = "success" ] && [ -n "$APP_TOKEN" ]; then
+            echo "app_backed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_backed=false" >> "$GITHUB_OUTPUT"
+            if [ "$APP_CONFIGURED" = "true" ]; then
+              {
+                echo "### GitHub App token fallback"
+                echo "GitHub App token creation failed, so publishing will use \`GITHUB_TOKEN\` instead."
+                echo "A successfully minted App token is required for formal approval."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
       - name: Skip an already-reviewed head
         id: publication-eligibility
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           completed_runs="$(gh api \
@@ -128,10 +149,10 @@ jobs:
           steps.review-context.outputs.claude_configured == 'true'
         uses: anthropics/claude-code-action@v1
         env:
-          # The App token takes precedence when configured, so all gh calls made
-          # by the action use the App identity. Forks never receive an App token.
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          # A successfully minted App token takes precedence, so all gh calls
+          # use the App identity. Forks never receive an App token.
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           REVIEW_MODE: ${{ steps.review-context.outputs.mode }}
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
@@ -234,12 +255,12 @@ jobs:
           steps.publication-eligibility.outputs.publish == 'true' &&
           steps.review-context.outputs.claude_configured == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_EVENT: ${{ steps.review-result.outputs.verdict }}
           REVIEW_LABEL: ${{ steps.review-result.outputs.label }}
-          HAS_APP_TOKEN: ${{ steps.app-token.outputs.token != '' }}
+          HAS_APP_TOKEN: ${{ steps.app-token-context.outputs.app_backed }}
         run: |
           case "$REVIEW_EVENT" in
             approve)
