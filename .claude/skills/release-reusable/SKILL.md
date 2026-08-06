@@ -17,6 +17,13 @@ sweep runs.** Work through the steps in order and stop at any failure.
 - `actionlint .github/workflows/*.yml` — must pass. If actionlint is missing, say so
   rather than skipping validation silently.
 - Report the SHA you are about to release: `git rev-parse HEAD`.
+- Note: the review workflow checks out this repo's protocol library
+  (`pr_label.py`, `review_publish.py`) at `github.job_workflow_sha` — the same
+  SHA the consumer pins — so a re-pin moves the workflow and the label
+  taxonomy **together**. The first canary after any release must confirm
+  `job_workflow_sha` populated (the run's "Checkout review protocol library"
+  step); if it ever comes up empty, pass the release SHA explicitly via the
+  workflow's `protocol_ref` input in the stubs.
 
 ## 2. Optionally move the `v1` tag
 
@@ -33,6 +40,8 @@ Both stubs live in a **different repo**:
 `~/Developer/the-lodge/scripts/claude-workflow-migration/stubs/`
 
 - `claude-code-review.yml` → pins `.github/workflows/claude-review.yml@<SHA>  # v1`
+  (this stub was retired 2026-07-31 and restored by the-lodge's rail-flip PR
+  alongside the PR-review unification; `sweep.sh` writes both stubs again)
 - `claude.yml` → pins `.github/workflows/claude-interactive.yml@<SHA>  # v1`
 
 Replace the old SHA with the new one in both, keeping the `# v1` comment. Then verify
