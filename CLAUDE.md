@@ -53,7 +53,9 @@ See `/release-reusable` for the full walkthrough.
 ## Verification
 
 There is no local test harness. Validate workflow YAML with `actionlint` (a
-`PostToolUse` hook runs it on edits under `.github/workflows/`); end-to-end proof
+`PostToolUse` hook runs it when Claude Code itself edits files under
+`.github/workflows/` — a local agent gate only, not CI and not a git hook;
+run `actionlint` by hand after any other kind of edit); end-to-end proof
 requires a real PR in a consumer repo pinned to the new SHA.
 
 ## Commit conventions
