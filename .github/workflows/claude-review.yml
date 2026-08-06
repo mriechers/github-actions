@@ -19,6 +19,13 @@ on:
         description: 'Optional GitHub App ID used to publish the native review state'
         type: string
         default: ''
+      protocol_ref:
+        description: >-
+          Ref of mriechers/github-actions to load the protocol library from.
+          Empty uses the SHA of this called workflow, keeping the workflow and
+          the taxonomy it executes pinned together.
+        type: string
+        default: ''
     secrets:
       claude_code_oauth_token:
         required: true
@@ -26,7 +33,7 @@ on:
         required: false
     outputs:
       review_verdict:
-        description: 'Machine-readable review verdict: approve, request_changes, or comment'
+        description: 'Machine-readable review verdict: approve, request_changes, comment, or inconclusive'
         value: ${{ jobs.claude-review.outputs.review_verdict }}
       review_label:
         description: 'Machine-readable final review label'
@@ -114,33 +121,40 @@ jobs:
             fi
           fi
 
-      - name: Skip an already-reviewed head
+      - name: Checkout pull request
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout review protocol library
+        # The protocol scripts (pr_label.py, review_publish.py) come from the
+        # same SHA the consumer pinned this workflow to, so a re-pin moves the
+        # workflow and its taxonomy together, atomically.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: mriechers/github-actions
+          ref: ${{ inputs.protocol_ref != '' && inputs.protocol_ref || github.job_workflow_sha }}
+          path: .protocol
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Decide publication eligibility for this head
         id: publication-eligibility
         env:
           GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          completed_runs="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?check_name=Claude%20autonomous%20review&status=completed&per_page=1" \
-            --jq '.total_count')"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?check_name=Claude%20autonomous%20review&per_page=50" \
+            | python3 .protocol/scripts/review_publish.py eligibility
 
-          if [ "$completed_runs" -gt 0 ]; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+          if grep -q '^publish=false$' "$GITHUB_OUTPUT"; then
             {
               echo "### Claude review: skipped"
-              echo "A completed \`Claude autonomous review\` check already exists for head \`${PR_HEAD_SHA}\`."
-              echo "No duplicate formal review, labels, or check run was published."
+              echo "Head \`${PR_HEAD_SHA}\`: $(grep '^reason=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)"
             } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Checkout pull request
-        if: steps.publication-eligibility.outputs.publish == 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 1
-          persist-credentials: false
 
       - name: Run Claude Code Review
         id: claude-review
@@ -162,9 +176,9 @@ jobs:
             You are the authoritative reviewer for ${{ github.repository }} PR #${{ github.event.pull_request.number }}.
 
             Review the PR diff and relevant repository context. Do not run PR code,
-            install dependencies, modify repository files (except the required result
-            file below), or use `gh`/GitHub APIs to create reviews, comments, labels,
-            checks, or merge PRs. Never merge a PR.
+            install dependencies, modify repository files, or use `gh`/GitHub APIs
+            to create reviews, comments, labels, checks, or merge PRs. Never merge
+            a PR.
 
             Use the code-review plugin and these caller-supplied review instructions:
             ${{ inputs.prompt }}
@@ -173,6 +187,18 @@ jobs:
             - `approve`: no actionable findings; a formal APPROVE is appropriate.
             - `request_changes`: at least one must-fix blocker; formal REQUEST_CHANGES.
             - `comment`: only nits or uncertainty; a formal COMMENT, never approval.
+            - `inconclusive`: you could not obtain the PR diff or otherwise could
+              not establish a verdict. This is not an approval and not a
+              request-for-changes; say why in the summary.
+
+            List each finding in `findings` with a stable id of the form
+            `pr:${{ github.event.pull_request.number }}:<short-slug>`. If a prior
+            review comment on this PR already assigned an id to the same issue,
+            reuse that id exactly — ids are how rounds are reconciled. Severity is
+            High, Medium, Low, or Nit. A High or Medium finding must cite a `path`
+            from this PR's changed files; observations about unchanged files
+            belong in the summary as non-blocking follow-ups, never quoted
+            verbatim if sensitive, and never as blocking findings.
 
             Return the validated structured output required by the supplied JSON
             schema. Its summary must be concise Markdown that explains findings and,
@@ -181,7 +207,7 @@ jobs:
             label state.
           claude_args: >-
             --model ${{ inputs.model }} --json-schema
-            '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes","comment"]},"summary":{"type":"string","minLength":1}},"required":["verdict","summary"],"additionalProperties":false}'
+            '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes","comment","inconclusive"]},"summary":{"type":"string","minLength":1},"findings":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","minLength":1},"severity":{"type":"string","enum":["High","Medium","Low","Nit"]},"path":{"type":"string","minLength":1},"summary":{"type":"string","minLength":1}},"required":["id","severity","path","summary"],"additionalProperties":false}}},"required":["verdict","summary"],"additionalProperties":false}'
 
       - name: Validate machine-readable review result
         id: review-result
@@ -189,65 +215,17 @@ jobs:
           steps.publication-eligibility.outputs.publish == 'true' &&
           steps.review-context.outputs.claude_configured == 'true'
         env:
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           STRUCTURED_OUTPUT: ${{ steps.claude-review.outputs.structured_output }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          import uuid
-
-          try:
-              result = json.loads(os.environ["STRUCTURED_OUTPUT"])
-          except json.JSONDecodeError as error:
-              sys.exit(f"Claude did not produce valid structured output: {error}")
-
-          if not isinstance(result, dict):
-              sys.exit("Claude structured output must be a JSON object")
-          if set(result) != {"verdict", "summary"}:
-              sys.exit("Claude structured output must contain only verdict and summary")
-
-          verdict = result.get("verdict")
-          summary = result.get("summary")
-          labels = {
-              "approve": "review:approved",
-              "request_changes": "review:blocker",
-              "comment": "review:nits",
-          }
-          events = {
-              "approve": "APPROVE",
-              "request_changes": "REQUEST_CHANGES",
-              "comment": "COMMENT",
-          }
-          conclusions = {
-              "approve": "success",
-              "request_changes": "failure",
-              "comment": "neutral",
-          }
-          if verdict not in labels:
-              sys.exit("Claude structured output verdict must be approve, request_changes, or comment")
-          if not isinstance(summary, str) or not summary.strip():
-              sys.exit("Claude structured output summary must be a non-empty string")
-
-          summary = summary.strip()
-          if len(summary) > 60000:
-              sys.exit("Claude review summary exceeds 60000 characters")
-
-          publication = {
-              "event": events[verdict],
-              "label": labels[verdict],
-              "summary": summary,
-              "check_conclusion": conclusions[verdict],
-          }
-          with open("claude-review-publication.json", "w", encoding="utf-8") as file:
-              json.dump(publication, file)
-
-          delimiter = f"review-{uuid.uuid4()}"
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"verdict={verdict}\n")
-              output.write(f"label={labels[verdict]}\n")
-              output.write(f"summary<<{delimiter}\n{summary}\n{delimiter}\n")
-          PY
+          # Blocking findings are validated against the PR's changed-file set:
+          # a path outside the diff cannot block (out-of-scope observations
+          # demote to follow-ups; an unobtainable diff demotes the verdict to
+          # inconclusive rather than blocking on the whole repository).
+          CHANGED_FILES="$(gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --name-only || true)"
+          export CHANGED_FILES
+          python3 .protocol/scripts/review_publish.py validate
 
       - name: Publish formal review, check, and labels
         if: >-
@@ -258,86 +236,19 @@ jobs:
           GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REVIEW_EVENT: ${{ steps.review-result.outputs.verdict }}
           REVIEW_LABEL: ${{ steps.review-result.outputs.label }}
           HAS_APP_TOKEN: ${{ steps.app-token-context.outputs.app_backed }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
-          case "$REVIEW_EVENT" in
-            approve)
-              CHECK_CONCLUSION=success
-              if [ "$HAS_APP_TOKEN" = "true" ]; then
-                REVIEW_API_EVENT=APPROVE
-                CLEAN_APPROVAL_NOTE=
-              else
-                REVIEW_API_EVENT=COMMENT
-                CLEAN_APPROVAL_NOTE="Clean verdict: formal approval was not submitted because GitHub App credentials are not configured; review:approved and this successful check record the result."
-              fi
-              ;;
-            request_changes)
-              REVIEW_API_EVENT=REQUEST_CHANGES
-              CHECK_CONCLUSION=failure
-              CLEAN_APPROVAL_NOTE=
-              ;;
-            comment)
-              REVIEW_API_EVENT=COMMENT
-              CHECK_CONCLUSION=neutral
-              CLEAN_APPROVAL_NOTE=
-              ;;
-            *)
-              echo "Unsupported validated review verdict: $REVIEW_EVENT" >&2
-              exit 1
-              ;;
-          esac
-          export REVIEW_API_EVENT CHECK_CONCLUSION CLEAN_APPROVAL_NOTE
+          # Exactly one review:* label, via the canonical state machine — never
+          # a bare `gh pr edit`, or the invariant drifts. `set` bootstraps the
+          # full taxonomy first.
+          python3 .protocol/.claude/skills/pr-watch/scripts/pr_label.py \
+            set "$GITHUB_REPOSITORY" "$PR_NUMBER" "$REVIEW_LABEL"
 
-          gh label create review:new --color ededed --description "Awaiting first review" --force
-          gh label create review:re-review --color 1d76db --description "Fixes pushed — awaiting re-review" --force
-          gh label create review:blocker --color b60205 --description "Review done — must-fix changes requested" --force
-          gh label create review:nits --color fbca04 --description "Review done — only minor/nit findings" --force
-          gh label create review:approved --color 0e8a16 --description "Review done — clean, no changes needed" --force
-
-          gh pr edit "$PR_NUMBER" --add-label "$REVIEW_LABEL"
-          for label in review:new review:re-review review:blocker review:nits review:approved; do
-            if [ "$label" != "$REVIEW_LABEL" ]; then
-              gh pr edit "$PR_NUMBER" --remove-label "$label" || true
-            fi
-          done
-
-          python3 - <<'PY'
-          import json
-          import os
-
-          with open("claude-review-publication.json", encoding="utf-8") as file:
-              publication = json.load(file)
-
-          review_body = publication["summary"]
-          if os.environ["CLEAN_APPROVAL_NOTE"]:
-              review_body = f"{review_body}\n\n{os.environ['CLEAN_APPROVAL_NOTE']}"
-
-          with open("claude-review-request.json", "w", encoding="utf-8") as file:
-              json.dump(
-                  {
-                      "body": review_body,
-                      "event": os.environ["REVIEW_API_EVENT"],
-                  },
-                  file,
-              )
-
-          with open("claude-review-check.json", "w", encoding="utf-8") as file:
-              json.dump(
-                  {
-                      "name": "Claude autonomous review",
-                      "head_sha": os.environ["PR_HEAD_SHA"],
-                      "status": "completed",
-                      "conclusion": os.environ["CHECK_CONCLUSION"],
-                      "output": {
-                          "title": f"Review: {os.environ['REVIEW_EVENT']}",
-                          "summary": publication["summary"],
-                      },
-                  },
-                  file,
-              )
-          PY
+          REVIEWED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export REVIEWED_AT
+          python3 .protocol/scripts/review_publish.py compose
 
           gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
             --input claude-review-request.json

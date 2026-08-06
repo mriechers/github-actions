@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # Stdlib-only suites, plain unittest — no pip, no pyproject. The
+      # protocol library and every skill's scripts are covered.
+      - name: Protocol and publisher tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Skill script tests
+        run: |
+          status=0
+          for dir in .claude/skills/*/tests; do
+            [ -d "$dir" ] || continue
+            echo "== $dir"
+            python3 -m unittest discover -s "$dir" -v || status=1
+          done
+          exit "$status"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Run actionlint on all workflows
+        # The workflow YAML is the product; lint it in CI, not only in the
+        # local PostToolUse hook (which covers agent edits alone and fails
+        # open when actionlint is absent).
+        uses: docker://rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+        with:
+          # github.job_workflow_sha is documented for reusable workflows but
+          # missing from actionlint's context schema — ignore that one error.
+          args: -color -ignore 'property "job_workflow_sha" is not defined'
