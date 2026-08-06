@@ -17,13 +17,16 @@ sweep runs.** Work through the steps in order and stop at any failure.
 - `actionlint .github/workflows/*.yml` — must pass. If actionlint is missing, say so
   rather than skipping validation silently.
 - Report the SHA you are about to release: `git rev-parse HEAD`.
-- Note: the review workflow checks out this repo's protocol library
-  (`pr_label.py`, `review_publish.py`) at `github.job_workflow_sha` — the same
-  SHA the consumer pins — so a re-pin moves the workflow and the label
-  taxonomy **together**. The first canary after any release must confirm
-  `job_workflow_sha` populated (the run's "Checkout review protocol library"
-  step); if it ever comes up empty, pass the release SHA explicitly via the
-  workflow's `protocol_ref` input in the stubs.
+- Note (**lands with the unification PR, mriechers/github-actions#12 — not yet
+  on `main`**): once that PR merges, the review workflow checks out this
+  repo's protocol library (`pr_label.py`, `review_publish.py`) at
+  `github.job_workflow_sha` — the same SHA the consumer pins — so a re-pin
+  moves the workflow and the label taxonomy **together**. From then on, the
+  first canary after any release must confirm `job_workflow_sha` populated
+  (the run's "Checkout review protocol library" step); if it ever comes up
+  empty, pass the release SHA explicitly via the workflow's `protocol_ref`
+  input in the stubs. Until #12 merges, `main`'s review workflow has none of
+  this — skip this check.
 
 ## 2. Optionally move the `v1` tag
 
