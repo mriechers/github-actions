@@ -370,10 +370,16 @@ def _gh_json(args):
 
 
 def _search_prs(author=DEFAULT_AUTHOR, limit=DEFAULT_LIMIT, state="open"):
-    """The single workspace-wide request. Do not turn this into a fan-out."""
+    """The single workspace-wide request. Do not turn this into a fan-out.
+
+    --archived=false matches the documented lane prefix (SKILL.md § the three
+    lanes): a PR in an archived repo cannot merge or take label writes, so
+    excluding it is the declared decision, and the code must agree with the
+    saved searches.
+    """
     return _gh_json([
         "search", "prs", "--state", state, "--author", author,
-        "--limit", str(limit),
+        "--limit", str(limit), "--archived=false",
         "--json", "repository,number,title,url,labels,isDraft,createdAt,updatedAt",
     ])
 

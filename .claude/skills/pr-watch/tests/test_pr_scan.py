@@ -189,6 +189,17 @@ class TestScan(unittest.TestCase):
         self.assertEqual([r["number"] for r in records], [1])
 
 
+
+class TestSearchArgs(unittest.TestCase):
+    def test_archived_repos_are_excluded(self):
+        # PRs in archived repos are unreviewable (label writes 403, so they
+        # cannot even carry the no-pr-watch opt-out) and would sit in the
+        # backlog as permanently un-drainable work.
+        import pr_scan
+        args = pr_scan._search_args(["mriechers"], "open", 30)
+        self.assertIn("--archived=false", args)
+        self.assertIn("--owner", args)
+
 class TestResolveOwners(unittest.TestCase):
     def test_empty_falls_back_to_defaults(self):
         self.assertEqual(resolve_owners(""),

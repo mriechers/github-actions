@@ -130,13 +130,24 @@ def _gh_json(args):
     return json.loads(out.stdout)
 
 
-def _search_prs(owners, state, limit):
-    """Search for PRs by owner and state."""
+def _search_args(owners, state, limit):
+    """Argv for the PR search — pure, so the flag set is testable.
+
+    --archived=false is load-bearing: PRs in archived repos are unreviewable
+    (label writes 403, so they cannot even carry the no-pr-watch opt-out) and
+    would sit in the backlog as permanently un-drainable work.
+    """
     args = ["search", "prs", "--state", state, "--limit", str(limit),
+            "--archived=false",
             "--json", "number,title,url,repository,isDraft,labels,createdAt,updatedAt"]
     for owner in owners:
         args += ["--owner", owner]
-    return _gh_json(args)
+    return args
+
+
+def _search_prs(owners, state, limit):
+    """Search for PRs by owner and state."""
+    return _gh_json(_search_args(owners, state, limit))
 
 
 def _pr_detail(nwo, number):
