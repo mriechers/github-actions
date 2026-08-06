@@ -22,11 +22,11 @@ on:
 jobs:
   add-to-project:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    # No checkout and no GITHUB_TOKEN use — auth is purely the PAT below.
+    permissions: {}
     steps:
       - name: Add issue to project
-        uses: actions/add-to-project@v1
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
           project-url: ${{ inputs.project_url }}
           github-token: ${{ secrets.add_to_project_token }}
