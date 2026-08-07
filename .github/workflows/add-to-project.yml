@@ -1,0 +1,33 @@
+name: Add Issues to Project (reusable)
+
+# Routes newly-opened issues to a GitHub Projects v2 board. Callers pass their
+# ops-area board URL. Uses a PAT (ADD_TO_PROJECT_TOKEN, project+repo scope) because
+# the default GITHUB_TOKEN cannot write to org/user Projects v2 boards.
+
+on:
+  workflow_call:
+    inputs:
+      project_url:
+        description: 'Target Projects v2 board URL (e.g. https://github.com/orgs/ORG/projects/N)'
+        required: true
+        type: string
+      labeled:
+        description: 'Optional: only add issues carrying this label (empty = all issues)'
+        type: string
+        default: ''
+    secrets:
+      add_to_project_token:
+        required: true
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    # No checkout and no GITHUB_TOKEN use — auth is purely the PAT below.
+    permissions: {}
+    steps:
+      - name: Add issue to project
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: ${{ inputs.project_url }}
+          github-token: ${{ secrets.add_to_project_token }}
+          labeled: ${{ inputs.labeled }}
