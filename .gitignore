@@ -3,5 +3,10 @@
 # Personal, per-machine Claude Code settings. The shared project loadout and the
 # actionlint hook live in .claude/settings.json and are tracked.
 .claude/settings.local.json
+
+# Agent worktree containers. Both hold live `git worktree` checkouts, so their
+# contents are working state, never repo content.
+.worktrees/
+.claude/worktrees/
 __pycache__/
 *.pyc
