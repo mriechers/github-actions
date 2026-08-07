@@ -41,6 +41,7 @@ jobs:
         # open when actionlint is absent).
         uses: docker://rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
         with:
-          # github.job_workflow_sha is documented for reusable workflows but
-          # missing from actionlint's context schema — ignore that one error.
-          args: -color -ignore 'property "job_workflow_sha" is not defined'
+          # Docker-action args are split on whitespace with no shell quoting,
+          # so anything needing quotes (like -ignore patterns) must live in
+          # .github/actionlint.yaml instead.
+          args: -color

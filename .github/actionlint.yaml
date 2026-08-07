@@ -1,0 +1,7 @@
+# actionlint configuration.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # github.job_workflow_sha is documented for reusable workflows but
+      # missing from actionlint's context schema.
+      - 'property "job_workflow_sha" is not defined'
