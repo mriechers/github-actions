@@ -129,6 +129,39 @@
   different cause). Happened three times in one session despite being noticed twice. Write the
   review with a placeholder, then substitute from `gh pr view <n> --json headRefOid -q .headRefOid`
   with an assertion that the substitution landed, immediately before posting.
+- **A reviewer's relay can lag its posted review — poll the thread before calling one silent.**
+  On `crows-nest#155` the teammate posted a full review *and* wrote `review:blocker`, then
+  relayed its step-7 summary ~90 seconds later. Checking at the 7-minute mark, the Leader read
+  the missing relay as the known silent-teammate failure and said so to the user — wrong twice
+  over, since the relay arrived and the review had been on-thread the whole time. Relay counts
+  for the session: 15/15 eventually arrived, 0 truly silent. **Never** infer review state from
+  relay state — `gh pr view --json comments` is the only source of truth, and "no relay yet"
+  means nothing at all. Allow ~2 minutes before treating a teammate as silent, and even then
+  check the thread first.
+- **Stacked ≠ racing — check `baseRefName` before calling two same-file PRs a collision.**
+  Seeing `github-actions#20` and `#23` both appending to `pr-watch/GOTCHAS.md`, the Leader
+  briefed `#23`'s reviewer on a merge-conflict/duplicate-entry risk that did not exist: `#23`'s
+  `baseRefName` **is** `#20`'s `headRefName`, so they are a stack, and `#23` builds on `#20`'s
+  additions rather than competing with them. One call settles it —
+  `gh pr view <n> --repo <r> --json baseRefName,headRefName` on both — and it costs less than
+  the wrong briefing did. (The briefing was not wasted: it still caught the reviewer up on the
+  sibling's findings. But state it as "read the sibling," not "expect a conflict.")
+- **`~/.claude/skills/<name>` is a symlink into the owning repo — there is no "deployed copy" to
+  sync.** Twice in one session the Leader told the user that merging a fix would correct "the
+  repo copy only" and leave the deployed skill stale pending a sync. There is no such sync:
+  `readlink -f ~/.claude/skills/pr-watch` resolves to
+  `~/Developer/github-actions/.claude/skills/pr-watch`, so the file read as "deployed" *is* the
+  repo's working tree at whatever branch it has checked out. Merging updates both because they
+  are one file. Corollary in the other direction: a stale-looking "deployed" file may simply be
+  a feature branch checked out in the owning repo — check `git -C <owner repo> branch --show-current`
+  before concluding anything about deployment state.
+- **`TeamCreate` is not always present; named `Agent()` spawns are the working fallback.**
+  `SKILL.md` Tick step 3 says to bootstrap a Team, but that tool is absent in some sessions.
+  Spawning `rv-<owner>-<name>-<n>` teammates directly with `Agent({name, model: "sonnet"})` gives
+  the same per-PR persistence, addressability for `TaskStop` recycling, and relay behaviour — 15
+  dispatches across one session, all posting and self-labelling correctly. Treat step 3 as
+  best-effort: if `TeamCreate` is unavailable, proceed with named spawns rather than falling back
+  to inline review.
 
 ## Confirming an author's number is not confirming it counts the right population (2026-08-11)
 **What went wrong:** Twice in one session I verified a figure against its source, reported it as exact, and was corrected by the author afterwards. On `crows-nest#155` I checked "1,573 notes rewritten" against the vault, got exactly 1,573, and called it verified — 449 of those were Syncthing conflict copies, so the real count was 1,124. On `skill-ops#46` I flagged "19 unique **enabled** entries" as non-reproducible because I counted 34 — I was counting every key in `enabledPlugins` rather than the ones set to `true`, which is what the sentence said. Their number was never wrong.
