@@ -10,8 +10,35 @@ shared workflow.
 
 | File | Purpose | Key inputs |
 |---|---|---|
+| `.github/workflows/floor.yml` | Tier 0 floor — full-history gitleaks secrets scan | `gitleaks-config`, `fetch-depth` (default `0`) |
 | `.github/workflows/claude-review.yml` | Auto Claude review with formal GitHub state | `model` (default `sonnet`), `prompt`, `review_label`, optional `github_app_id` |
 | `.github/workflows/claude-interactive.yml` | Interactive `@claude` on issues/PRs | `model` (default `sonnet`), `claude_args` |
+
+### The floor
+
+Every non-archived repo in the fleet should call `floor.yml`. It is the Tier 0
+check from the-lodge's `conventions/CI_STANDARDIZATION.md`: *don't ship
+credentials*. Nothing is forwarded — gitleaks runs on the caller's own
+`GITHUB_TOKEN`.
+
+```yaml
+name: Floor
+on: [push, pull_request]
+jobs:
+  floor:
+    permissions:
+      contents: read
+      pull-requests: write   # gitleaks comments findings on PRs
+    uses: mriechers/github-actions/.github/workflows/floor.yml@<sha>
+```
+
+> **Why the floor lives here and not in the-lodge**, which is where the tier
+> model is documented: the-lodge is private, and a reusable workflow in a
+> private repo cannot be called by other repos unless that repo's Actions
+> access is explicitly widened. A floor definition nothing can consume is not a
+> floor — and that is what happened. As of 2026-08-10 exactly one repo in the
+> fleet ran a secrets scan, and it did so by inlining gitleaks rather than
+> calling the unreachable reusable.
 
 ## Consuming
 

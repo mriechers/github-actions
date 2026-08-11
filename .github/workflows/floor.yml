@@ -1,0 +1,66 @@
+name: Floor (reusable)
+
+# Workspace-standard Tier 0 "floor": a full-history secrets scan that every
+# non-archived repo in the fleet should run, regardless of language or scale.
+# See the-lodge conventions/CI_STANDARDIZATION.md for the tier model.
+#
+# Why this lives here and not in the-lodge, which is where the tier model is
+# documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
+# repo cannot be called by other repos unless Actions access is explicitly
+# widened. A floor definition that no repo can consume is not a floor. This
+# repo is public precisely so the fleet can call one shared definition, so the
+# floor belongs here.
+#
+# Consumers add .github/workflows/floor.yml:
+#
+#   name: Floor
+#   on: [push, pull_request]
+#   jobs:
+#     floor:
+#       permissions:
+#         contents: read
+#         pull-requests: write   # gitleaks comments findings on PRs
+#       uses: mriechers/github-actions/.github/workflows/floor.yml@<sha>
+#
+# The permissions block must live in the caller — a reusable can only downgrade
+# the token it is handed, never widen it.
+
+on:
+  workflow_call:
+    inputs:
+      gitleaks-config:
+        description: >-
+          Optional path, in the calling repo, to a custom .gitleaks.toml.
+          Empty uses gitleaks' built-in ruleset.
+        required: false
+        type: string
+        default: ''
+      fetch-depth:
+        description: >-
+          Checkout depth. 0 (default) scans full history, which is the point of
+          the floor — a secret that was committed and later removed is still
+          published. Set to 1 only for a repo whose history is known-clean and
+          too large to scan on every push.
+        required: false
+        type: number
+        default: 0
+
+jobs:
+  secrets-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+          # gitleaks only reads the working tree and history; it never pushes.
+          # Leaving the token in .git/config would hand every later step in the
+          # caller's job a credential this workflow has no reason to grant.
+          persist-credentials: false
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ${{ inputs.gitleaks-config }}
