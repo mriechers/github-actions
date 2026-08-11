@@ -1,0 +1,127 @@
+name: JS/TS CI (reusable)
+
+# Workspace-standard JavaScript/TypeScript CI — Tier A reusable. Includes
+# the Floor (gitleaks) plus lint, typecheck, and test. Permissive defaults;
+# consumer repos can ratchet stricter via their own eslint/tsconfig.
+# See the-lodge conventions/CI_STANDARDIZATION.md for the tier model.
+#
+# Why this lives here and not in the-lodge, which is where the tier model is
+# documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
+# repo cannot be called by other repos unless Actions access is explicitly
+# widened. This definition sat in the-lodge from its creation until 2026-08-11
+# with exactly zero callers fleet-wide — unreachable, not unwanted. Same
+# reasoning that moved the floor here; see floor.yml.
+#
+# Consumers call this as a reusable workflow:
+#
+#   jobs:
+#     js-ci:
+#       uses: mriechers/github-actions/.github/workflows/js-ci.yml@<sha>
+#       with:
+#         node-version: "22"
+#         install-cmd: "pnpm install --frozen-lockfile"
+#         test-cmd: "pnpm test"
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node version"
+        required: false
+        type: string
+        default: "20"
+      install-cmd:
+        description: "Install command (npm ci / pnpm install --frozen-lockfile / yarn install --immutable)"
+        required: false
+        type: string
+        default: "npm ci"
+      lint-cmd:
+        description: "Lint command — errors-only by default"
+        required: false
+        type: string
+        default: "npx eslint --quiet ."
+      typecheck-cmd:
+        description: "Typecheck command"
+        required: false
+        type: string
+        default: "npx tsc --noEmit"
+      test-cmd:
+        description: "Test command (vitest/jest/etc.)"
+        required: false
+        type: string
+        default: "npx vitest run"
+      run-tests:
+        description: "Set false to skip the test job"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: eslint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
+        run: eval "$INSTALL_CMD"
+      - name: Lint
+        env:
+          LINT_CMD: ${{ inputs.lint-cmd }}
+        run: eval "$LINT_CMD"
+
+  typecheck:
+    name: tsc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
+        run: eval "$INSTALL_CMD"
+      - name: Typecheck
+        env:
+          TYPECHECK_CMD: ${{ inputs.typecheck-cmd }}
+        run: eval "$TYPECHECK_CMD"
+
+  test:
+    name: tests
+    if: ${{ inputs.run-tests }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
+        run: eval "$INSTALL_CMD"
+      - name: Run tests
+        env:
+          TEST_CMD: ${{ inputs.test-cmd }}
+        run: eval "$TEST_CMD"

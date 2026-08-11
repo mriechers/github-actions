@@ -1,0 +1,132 @@
+name: Python CI (reusable)
+
+# Workspace-standard Python CI — Tier A reusable. Includes the Floor
+# (gitleaks) plus lint, typecheck, and test. Permissive defaults; consumer
+# repos can ratchet stricter via their own ruff/pyright config files.
+# See the-lodge conventions/CI_STANDARDIZATION.md for the tier model.
+#
+# Why this lives here and not in the-lodge, which is where the tier model is
+# documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
+# repo cannot be called by other repos unless Actions access is explicitly
+# widened. This definition sat in the-lodge from its creation until 2026-08-11
+# with exactly zero callers fleet-wide — unreachable, not unwanted. Same
+# reasoning that moved the floor here; see floor.yml.
+#
+# Consumers call this as a reusable workflow:
+#
+#   jobs:
+#     python-ci:
+#       uses: mriechers/github-actions/.github/workflows/python-ci.yml@<sha>
+#       with:
+#         python-version: "3.12"
+#         test-paths: "tests/ services/*/tests/"
+#         install-cmd: "uv sync --all-packages"
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to test against"
+        required: false
+        type: string
+        default: "3.11"
+      test-paths:
+        description: "Space-separated paths passed to pytest"
+        required: false
+        type: string
+        default: "tests/"
+      install-cmd:
+        description: "Command to install deps (e.g. 'pip install -e .[dev]' or 'uv sync')"
+        required: false
+        type: string
+        default: "pip install -e ."
+      ruff-select:
+        description: "Ruff rule selection (errors-only by default; bump for stricter)"
+        required: false
+        type: string
+        default: "E,F,W"
+      pyright-mode:
+        description: "Pyright mode: 'basic' (permissive) or 'strict'"
+        required: false
+        type: string
+        default: "basic"
+      run-tests:
+        description: "Set false to skip the test job (for repos with no tests yet)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: ruff (errors-only by default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        env:
+          RUFF_SELECT: ${{ inputs.ruff-select }}
+        run: ruff check --select="$RUFF_SELECT" .
+
+  typecheck:
+    name: pyright (${{ inputs.pyright-mode }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+      - name: Install project + pyright
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
+        run: |
+          eval "$INSTALL_CMD" || true   # tolerate repos without installable pkg
+          pip install pyright
+      - name: Typecheck
+        env:
+          PYRIGHT_MODE: ${{ inputs.pyright-mode }}
+        run: |
+          if [ "$PYRIGHT_MODE" = "strict" ]; then
+            pyright --warnings
+          else
+            pyright
+          fi
+
+  test:
+    name: pytest
+    if: ${{ inputs.run-tests }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+      - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
+        run: eval "$INSTALL_CMD"
+      - name: Run tests
+        env:
+          TEST_PATHS: ${{ inputs.test-paths }}
+        run: pytest -q --tb=short $TEST_PATHS

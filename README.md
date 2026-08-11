@@ -13,6 +13,26 @@ shared workflow.
 | `.github/workflows/floor.yml` | Tier 0 floor — full-history gitleaks secrets scan | `gitleaks-config`, `fetch-depth` (default `0`) |
 | `.github/workflows/claude-review.yml` | Auto Claude review with formal GitHub state | `model` (default `sonnet`), `prompt`, `review_label`, optional `github_app_id` |
 | `.github/workflows/claude-interactive.yml` | Interactive `@claude` on issues/PRs | `model` (default `sonnet`), `claude_args` |
+| `.github/workflows/python-ci.yml` | Tier A Python CI — floor + ruff + pyright + pytest | `python-version` (default `3.11`), `test-paths`, `install-cmd`, `ruff-select`, `pyright-mode`, `run-tests` |
+| `.github/workflows/js-ci.yml` | Tier A JS/TS CI — floor + lint + typecheck + test | `node-version`, `install-cmd`, `lint-cmd`, `test-cmd` |
+
+### Tier A language CI
+
+`python-ci.yml` and `js-ci.yml` are the Tier A language checks that sit above the
+floor. Both embed their own gitleaks step, so a repo calling one of them already
+has the floor covered and does not need a separate `floor.yml` caller.
+
+```yaml
+jobs:
+  python-ci:
+    uses: mriechers/github-actions/.github/workflows/python-ci.yml@<sha>
+    with:
+      python-version: "3.12"
+      test-paths: "tests/"
+```
+
+Both moved here from the-lodge on 2026-08-11 for the same reason as the floor:
+they were unreachable in a private repo and had **zero callers fleet-wide**.
 
 ### The floor
 
