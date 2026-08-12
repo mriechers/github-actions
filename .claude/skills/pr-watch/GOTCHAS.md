@@ -163,22 +163,48 @@
   best-effort: if `TeamCreate` is unavailable, proceed with named spawns rather than falling back
   to inline review.
 
-## Confirming an author's number is not confirming it counts the right population (2026-08-11)
-**What went wrong:** Twice in one session I verified a figure against its source, reported it as exact, and was corrected by the author afterwards. On `crows-nest#155` I checked "1,573 notes rewritten" against the vault, got exactly 1,573, and called it verified — 449 of those were Syncthing conflict copies, so the real count was 1,124. On `skill-ops#46` I flagged "19 unique **enabled** entries" as non-reproducible because I counted 34 — I was counting every key in `enabledPlugins` rather than the ones set to `true`, which is what the sentence said. Their number was never wrong.
-**Why it happened:** both checks answered "does this number match the source?" and neither asked "is this number counting the thing it claims to count?" A count is two claims — an arithmetic one and a population one — and re-running the author's own measurement only tests the first. The second failure was narrower and worse: a qualifier (`enabled`, `real notes`) was doing load-bearing work and I read past it, which produces confident-and-wrong review rather than merely incomplete review.
-**Don't:** report a count as verified after reproducing it. **Do:** before endorsing any figure, say out loud what population it claims and check the denominator separately from the arithmetic — for file counts, whether the corpus contains duplicates/conflict copies/generated artifacts; for config counts, whether "enabled/active/real" is filtering something your reproduction isn't. And when a number won't reproduce, raise it as a **scope question, not a defect** — both corrections above cost nothing precisely because they were phrased as "I counted differently, what was your scope?" rather than "your number is wrong."
-
-## A failed scan is not a quiet tick (2026-08-11)
-**What went wrong:** Two scans failed mid-session with `HTTP 504` and `HTTP 502` on `api.github.com/graphql`; `githubstatus.com` confirmed **Partially Degraded Service**. Both succeeded on an immediate retry.
-**Why it matters:** the tick log's quiet entries and a failed scan look identical at the end of a turn — "nothing to review." They are opposite claims. A failed scan is *no information*, and folding it into a run of quiet ticks silently converts "I don't know" into "nothing happened," which is how a real PR sits unreviewed behind an API blip.
-**Don't:** treat a scan error as a quiet tick. **Do:** retry once. Distinguish external from local before assuming transience — `gh auth status` and `gh api rate_limit` separate a degraded API from an expired credential or an exhausted quota, and only the first is safe to retry through. If both attempts fail, report the tick as **UNSCANNED** and say so to the user; do not append it to the quiet-tick log.
-
-## A PR that merges carrying an open finding leaves the finding homeless (2026-08-11)
-**What went wrong:** `the-lodge#610` merged ~15 minutes after a `review:blocker` review, carrying a Medium (a test fixture that begins failing on a fixed future date). `reviewer.md` correctly says to report-and-stop on a merged PR rather than comment, and the one-comment-per-SHA rule blocks a second comment at an unmoved head — so the correct behaviour left the finding with nowhere to live. It survived only because it was carried in the tick log and filed 14 hours later during `/wrap-up`.
-**Why it matters:** review findings are addressed to a PR thread, and merging closes that address. An unresolved High/Medium at merge time is the one case where the finding outlives its container.
-**Don't:** rely on the next `/wrap-up` to rescue it. **Do:** when a scan shows a tracked PR has left the open set while its last verdict was `review:blocker`, file a GitHub issue **that tick**, on the repo, quoting the finding and its verification. Note this is a write beyond "comments and labels only" — ask the user first unless they have already authorised issue-filing for this case.
-
-## Deferring a PR is not free (2026-08-11)
-**What went wrong:** A queue built to 6 during a burst; three of the queued PRs (`the-lodge#588`, `#615`, `pbswi#212`) merged **unreviewed** before the queue drained.
-**Why it happened:** queueing was treated as "review later," but the author merges on their own schedule. Deferral is a bet that the PR will still be open next tick, and that bet is worst on exactly the PRs that look nearly finished.
-**Don't:** queue by size alone, oldest-first, when the queue is longer than one tick's capacity. **Do:** prefer deferring PRs that look slow-moving (drafts, long-running plans, PRs awaiting a human decision) over ones that look close to merge-ready. When capacity is short, a fast pass on a nearly-done PR beats a thorough one that arrives after the merge.
+- **Confirming an author's number is not confirming it counts the right population.** Twice in
+  one session I verified a figure against its source, reported it exact, and was corrected
+  afterwards. On `crows-nest#155` I checked "1,573 notes rewritten" against the vault, got
+  exactly 1,573, and called it verified — 449 were Syncthing conflict copies, so the real count
+  was 1,124. On `skill-ops#46` I flagged "19 unique **enabled** entries" as non-reproducible
+  because I counted 34 — I was counting every key in `enabledPlugins` rather than the ones set
+  to `true`, which is what the sentence said. Their number was never wrong. Both checks answered
+  "does this match the source?" and neither asked "is it counting what it claims to count?" A
+  count is two claims, arithmetic and population, and re-running the author's own measurement
+  only tests the first. Before endorsing a figure, say out loud what population it claims and
+  check the denominator separately from the arithmetic — for file counts, whether the corpus
+  holds duplicates/conflict copies/generated artifacts; for config counts, whether
+  "enabled/active/real" filters something your reproduction doesn't. And when a number won't
+  reproduce, raise it as a **scope question, not a defect**: both corrections above cost nothing
+  precisely because they were phrased as "I counted differently, what was your scope?"
+- **A failed scan is not a quiet tick.** Two scans failed mid-session with `HTTP 504` and `502`
+  on `api.github.com/graphql`; `githubstatus.com` confirmed Partially Degraded Service, and both
+  succeeded on immediate retry. The tick log's quiet entries and a failed scan look identical at
+  the end of a turn — "nothing to review" — but they are opposite claims. A failed scan is *no
+  information*, and folding it into a run of quiet ticks converts "I don't know" into "nothing
+  happened," which is how a real PR sits unreviewed behind an API blip. Retry once, and separate
+  external from local before assuming transience: `gh auth status` and `gh api rate_limit`
+  distinguish a degraded API from an expired credential or an exhausted quota, and only the
+  first is safe to retry through. If both attempts fail, report the tick as **UNSCANNED** to the
+  user; do not append it to the quiet-tick log.
+- **A PR that merges carrying an open finding leaves the finding homeless.** `the-lodge#610`
+  merged ~15 minutes after a `review:blocker` review, carrying a Medium (a test fixture that
+  starts failing on a fixed future date). `reviewer.md` correctly says to report-and-stop on a
+  merged PR rather than comment, and the one-comment-per-SHA rule blocks a second comment at an
+  unmoved head — so correct behaviour left the finding with nowhere to live. It survived only
+  because the tick log carried it and `/wrap-up` filed it 14 hours later. Review findings are
+  addressed to a PR thread, and merging closes that address; an unresolved High/Medium at merge
+  time is the one case where the finding outlives its container. Don't rely on the next
+  `/wrap-up` to rescue it — when a scan shows a tracked PR has left the open set while its last
+  verdict was `review:blocker`, file a GitHub issue **that tick**, quoting the finding and its
+  verification. That is a write beyond "comments and labels only," so ask first unless the user
+  has already authorised issue-filing for this case.
+- **Deferring a PR is not free.** A queue built to 6 during a burst; three of the queued PRs
+  (`the-lodge#588`, `#615`, `pbswi#212`) merged **unreviewed** before it drained. Queueing was
+  treated as "review later," but the author merges on their own schedule — deferral is a bet
+  that the PR is still open next tick, and that bet is worst on exactly the PRs that look nearly
+  finished. Don't queue by size alone, oldest-first, when the queue is longer than one tick's
+  capacity. Prefer deferring what looks slow-moving (drafts, long-running plans, PRs awaiting a
+  human decision) over what looks close to merge-ready: when capacity is short, a fast pass on a
+  nearly-done PR beats a thorough one that arrives after the merge.
