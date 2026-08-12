@@ -58,7 +58,18 @@ jobs:
             case "${PR_NUMBER}" in
               ''|*[!0-9]*) echo "::error::non-numeric PR number: ${PR_NUMBER}"; exit 1 ;;
             esac
-            pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+            # Fail closed, and loudly. Without this, a transient API error kills the
+            # job under `set -e` before checkout, with no annotation and no comment
+            # posted — indistinguishable from the workflow never firing. The
+            # unresolved-SHA branch below warns and falls back; this one must not,
+            # because "couldn't ask which repo the head is on" is exactly the state
+            # where falling back to the default branch would resurrect the bug this
+            # step exists to fix.
+            if ! pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" 2>&1); then
+              echo "::error::could not read PR #${PR_NUMBER} (${pr_json}) —" \
+                   "refusing to review an unidentified tree."
+              exit 1
+            fi
             head_sha=$(printf '%s' "$pr_json" | jq -r '.head.sha // ""')
             same_repo=$(printf '%s' "$pr_json" \
               | jq -r '((.head.repo.full_name // "") == (.base.repo.full_name // "")) | tostring')

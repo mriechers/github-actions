@@ -36,17 +36,18 @@ def _step_script() -> str:
 class ResolveReviewRefTest(unittest.TestCase):
     """Each case runs the real step body with a fake `gh` on PATH."""
 
-    def run_step(self, pr_number: str, pr_json: dict | None = None):
+    def run_step(self, pr_number: str, pr_json: dict | None = None, gh_exit: int = 0):
         """Return (exit_code, outputs dict, stdout+stderr)."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
             bindir.mkdir()
-            # Stub gh: ignores its args, prints the canned PR payload.
+            # Stub gh: ignores its args, prints the canned PR payload. gh_exit
+            # simulates a transient API failure (rate limit, network blip).
             (bindir / "gh").write_text(
                 "#!/bin/sh\ncat <<'JSON'\n"
                 + json.dumps(pr_json or {})
-                + "\nJSON\n",
+                + f"\nJSON\nexit {gh_exit}\n",
                 encoding="utf-8",
             )
             (bindir / "gh").chmod(0o755)
@@ -109,6 +110,17 @@ class ResolveReviewRefTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out["ref"], "")
         self.assertIn("Could not resolve", log)
+
+    def test_api_failure_fails_closed_and_says_so(self):
+        """A dead API call must not fall back to the default branch.
+
+        Falling back there is precisely the bug this step fixes, and it would do
+        it silently. Fail the job with an annotation instead.
+        """
+        code, _, log = self.run_step("621", gh_exit=1)
+        self.assertEqual(code, 1)
+        self.assertIn("::error::", log)
+        self.assertIn("unidentified tree", log)
 
 
 if __name__ == "__main__":
