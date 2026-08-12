@@ -132,3 +132,82 @@
   different cause). Happened three times in one session despite being noticed twice. Write the
   review with a placeholder, then substitute from `gh pr view <n> --json headRefOid -q .headRefOid`
   with an assertion that the substitution landed, immediately before posting.
+- **A reviewer's relay can lag its posted review — poll the thread before calling one silent.**
+  On `crows-nest#155` the teammate posted a full review *and* wrote `review:blocker`, then
+  relayed its step-7 summary ~90 seconds later. Checking at the 7-minute mark, the Leader read
+  the missing relay as the known silent-teammate failure and said so to the user — wrong twice
+  over, since the relay arrived and the review had been on-thread the whole time. Relay counts
+  for the session: 15/15 eventually arrived, 0 truly silent. **Never** infer review state from
+  relay state — `gh pr view --json comments` is the only source of truth, and "no relay yet"
+  means nothing at all. Allow ~2 minutes before treating a teammate as silent, and even then
+  check the thread first.
+- **Stacked ≠ racing — check `baseRefName` before calling two same-file PRs a collision.**
+  Seeing `github-actions#20` and `#23` both appending to `pr-watch/GOTCHAS.md`, the Leader
+  briefed `#23`'s reviewer on a merge-conflict/duplicate-entry risk that did not exist: `#23`'s
+  `baseRefName` **is** `#20`'s `headRefName`, so they are a stack, and `#23` builds on `#20`'s
+  additions rather than competing with them. One call settles it —
+  `gh pr view <n> --repo <r> --json baseRefName,headRefName` on both — and it costs less than
+  the wrong briefing did. (The briefing was not wasted: it still caught the reviewer up on the
+  sibling's findings. But state it as "read the sibling," not "expect a conflict.")
+- **`~/.claude/skills/<name>` is a symlink into the owning repo — there is no "deployed copy" to
+  sync.** Twice in one session the Leader told the user that merging a fix would correct "the
+  repo copy only" and leave the deployed skill stale pending a sync. There is no such sync:
+  `readlink -f ~/.claude/skills/pr-watch` resolves to
+  `~/Developer/github-actions/.claude/skills/pr-watch`, so the file read as "deployed" *is* the
+  repo's working tree at whatever branch it has checked out. Merging updates both because they
+  are one file. Corollary in the other direction: a stale-looking "deployed" file may simply be
+  a feature branch checked out in the owning repo — check `git -C <owner repo> branch --show-current`
+  before concluding anything about deployment state.
+- **`TeamCreate` is not always present; named `Agent()` spawns are the working fallback.**
+  `SKILL.md` Tick step 3 says to bootstrap a Team, but that tool is absent in some sessions.
+  Spawning `rv-<owner>-<name>-<n>` teammates directly with `Agent({name, model: "sonnet"})` gives
+  the same per-PR persistence, addressability for `TaskStop` recycling, and relay behaviour — 15
+  dispatches across one session, all posting and self-labelling correctly. Treat step 3 as
+  best-effort: if `TeamCreate` is unavailable, proceed with named spawns rather than falling back
+  to inline review.
+
+- **Confirming an author's number is not confirming it counts the right population.** Twice in
+  one session I verified a figure against its source, reported it exact, and was corrected
+  afterwards. On `crows-nest#155` I checked "1,573 notes rewritten" against the vault, got
+  exactly 1,573, and called it verified — 449 were Syncthing conflict copies, so the real count
+  was 1,124. On `skill-ops#46` I flagged "19 unique **enabled** entries" as non-reproducible
+  because I counted 34 — I was counting every key in `enabledPlugins` rather than the ones set
+  to `true`, which is what the sentence said. Their number was never wrong. Both checks answered
+  "does this match the source?" and neither asked "is it counting what it claims to count?" A
+  count is two claims, arithmetic and population, and re-running the author's own measurement
+  only tests the first. Before endorsing a figure, say out loud what population it claims and
+  check the denominator separately from the arithmetic — for file counts, whether the corpus
+  holds duplicates/conflict copies/generated artifacts; for config counts, whether
+  "enabled/active/real" filters something your reproduction doesn't. And when a number won't
+  reproduce, raise it as a **scope question, not a defect**: both corrections above cost nothing
+  precisely because they were phrased as "I counted differently, what was your scope?"
+- **A failed scan is not a quiet tick.** Two scans failed mid-session with `HTTP 504` and `502`
+  on `api.github.com/graphql`; `githubstatus.com` confirmed Partially Degraded Service, and both
+  succeeded on immediate retry. The tick log's quiet entries and a failed scan look identical at
+  the end of a turn — "nothing to review" — but they are opposite claims. A failed scan is *no
+  information*, and folding it into a run of quiet ticks converts "I don't know" into "nothing
+  happened," which is how a real PR sits unreviewed behind an API blip. Retry once, and separate
+  external from local before assuming transience: `gh auth status` and `gh api rate_limit`
+  distinguish a degraded API from an expired credential or an exhausted quota, and only the
+  first is safe to retry through. If both attempts fail, report the tick as **UNSCANNED** to the
+  user; do not append it to the quiet-tick log.
+- **A PR that merges carrying an open finding leaves the finding homeless.** `the-lodge#610`
+  merged ~15 minutes after a `review:blocker` review, carrying a Medium (a test fixture that
+  starts failing on a fixed future date). `reviewer.md` correctly says to report-and-stop on a
+  merged PR rather than comment, and the one-comment-per-SHA rule blocks a second comment at an
+  unmoved head — so correct behaviour left the finding with nowhere to live. It survived only
+  because the tick log carried it and `/wrap-up` filed it 14 hours later. Review findings are
+  addressed to a PR thread, and merging closes that address; an unresolved High/Medium at merge
+  time is the one case where the finding outlives its container. Don't rely on the next
+  `/wrap-up` to rescue it — when a scan shows a tracked PR has left the open set while its last
+  verdict was `review:blocker`, file a GitHub issue **that tick**, quoting the finding and its
+  verification. That is a write beyond "comments and labels only," so ask first unless the user
+  has already authorised issue-filing for this case.
+- **Deferring a PR is not free.** A queue built to 6 during a burst; three of the queued PRs
+  (`the-lodge#588`, `#615`, `pbswi#212`) merged **unreviewed** before it drained. Queueing was
+  treated as "review later," but the author merges on their own schedule — deferral is a bet
+  that the PR is still open next tick, and that bet is worst on exactly the PRs that look nearly
+  finished. Don't queue by size alone, oldest-first, when the queue is longer than one tick's
+  capacity. Prefer deferring what looks slow-moving (drafts, long-running plans, PRs awaiting a
+  human decision) over what looks close to merge-ready: when capacity is short, a fast pass on a
+  nearly-done PR beats a thorough one that arrives after the merge.
