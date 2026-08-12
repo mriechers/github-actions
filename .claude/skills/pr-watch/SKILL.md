@@ -315,3 +315,21 @@ they live in `pr_scan.py` and the PR thread, not in any agent runtime. Per
 /pr-watch --backlog        # clear the catch-up queue first
 /loop pr-watch             # then listen all day
 ```
+
+**Default to a fixed sub-60m cron interval, not a bare `/loop`.** A bare `/loop
+/pr-watch` self-paces via `ScheduleWakeup`, which clamps to a 3600s maximum — measured
+end-to-end that lands ticks ~62 minutes apart, just past the 1-hour prompt-cache TTL, so
+every idle tick pays cache-**write** price (2.0×) instead of cache-**read** (0.1×). One
+weekend of this cost 361.7M tokens, 57% of it on ticks that found nothing to do. Use
+`CronCreate` with an explicit interval that cleanly divides the hour (`*/30`, `*/20`,
+`*/15` — not `*/45`, which fires unevenly) instead:
+
+```
+CronCreate({ cron: "3,33 * * * *", prompt: "/pr-watch", recurring: true })
+```
+
+Offset off `:00`/`:30` to avoid the fleet-wide top-of-hour pile-up. See
+[[feedback-loop-interval-cache-ttl]] / `feedback_loop_interval_cache_ttl.md` in memory
+for the measured cost breakdown. `/loop`'s own dynamic self-pacing remains fine for
+tasks whose next run should genuinely vary with what was found — pr-watch's cadence is
+constant, so it should default to constant scheduling.
