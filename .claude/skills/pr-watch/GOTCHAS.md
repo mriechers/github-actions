@@ -52,12 +52,15 @@
 - **Re-fetch the head SHA at post time — branches rebase/force-push mid-tick.** A PR's head
   can move between the scan and your comment (a force-push/rebase gives the same content a new
   SHA). Read `headRefOid` again right before posting, stamp *that* SHA, and confirm the
-  content still matches what you reviewed. And always use the **full 40-hex** SHA in the
-  marker — a truncated (e.g. 10-hex) marker does **not** fail the regex: `MARKER_RE`
-  (`pr_scan.py:14`) accepts `[0-9a-fA-F]{7,40}`, so it matches and captures the short SHA
-  happily. The break is one step later in `classify()` (`pr_scan.py:40-45`), where that
-  short SHA never string-equals the full 40-hex `headRefOid` — so `last_sha != head_sha`
-  is always true, the PR reads as `changed` forever, and it's re-reviewed every tick.
+  content still matches what you reviewed. Still write the **full 40-hex** SHA in the marker,
+  but know that the original reason has since been fixed. A truncated (e.g. 10-hex) marker
+  does not fail the regex: `MARKER_RE` (`scripts/pr_scan.py:16`) accepts `[0-9a-fA-F]{7,40}`
+  and captures the short SHA happily. It *used to* break one step later in `classify()`
+  (`scripts/pr_scan.py:50-59`), where a short SHA never string-equals the full 40-hex
+  `headRefOid`, so the PR read as `changed` forever and was re-reviewed every tick.
+  `classify()` now prefix-matches any marker under 40 chars, closing that loop — verified,
+  a 10-hex marker classifies `current`. Write the full SHA regardless: a prefix is ambiguous
+  by construction, and the guard is a backstop rather than the contract.
 - **`NO-REVIEW` ≠ not-reviewed.** pr-watch writes its review to the PR **comments thread**,
   not the checks tab, so status tools that detect "reviewed" by looking for an installed CI
   review workflow under-report pr-watch-covered PRs — and `MERGEABLE + NO-REVIEW` then reads
