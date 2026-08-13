@@ -35,10 +35,72 @@ jobs:
       id-token: write
       actions: read
     steps:
+      - name: Resolve the ref under review
+        id: target
+        # These events all fire with github.ref pointing at the DEFAULT BRANCH, not
+        # the PR. Checking out without a ref therefore hands the reviewer a tree that
+        # does not contain the change — and it fails selectively: claims drawn from
+        # the API-fetched diff are right, claims drawn from reading files on disk
+        # describe the base branch, in the same review with nothing marking which is
+        # which. See mriechers/github-actions#22.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The PR number, from whichever event fired. Empty for `issues`, which has
+          # no head to check out.
+          PR_NUMBER: ${{ github.event.pull_request.number || (github.event.issue.pull_request && github.event.issue.number) || '' }}
+        run: |
+          set -euo pipefail
+          ref=""
+          if [ -n "${PR_NUMBER}" ]; then
+            # PR_NUMBER is an integer from the API rather than attacker text, but it
+            # is about to select what code we execute. Refuse anything else.
+            case "${PR_NUMBER}" in
+              ''|*[!0-9]*) echo "::error::non-numeric PR number: ${PR_NUMBER}"; exit 1 ;;
+            esac
+            # Fail closed, and loudly. Without this, a transient API error kills the
+            # job under `set -e` before checkout, with no annotation and no comment
+            # posted — indistinguishable from the workflow never firing. The
+            # unresolved-SHA branch below warns and falls back; this one must not,
+            # because "couldn't ask which repo the head is on" is exactly the state
+            # where falling back to the default branch would resurrect the bug this
+            # step exists to fix.
+            if ! pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" 2>&1); then
+              echo "::error::could not read PR #${PR_NUMBER} (${pr_json}) —" \
+                   "refusing to review an unidentified tree."
+              exit 1
+            fi
+            head_sha=$(printf '%s' "$pr_json" | jq -r '.head.sha // ""')
+            same_repo=$(printf '%s' "$pr_json" \
+              | jq -r '((.head.repo.full_name // "") == (.base.repo.full_name // "")) | tostring')
+
+            if [ "$same_repo" != "true" ]; then
+              # Fork PR. refs/pull/N/head is untrusted code and this job holds
+              # contents: write plus the OAuth token — checking it out here is the
+              # pwn-request shape, and the actor gate above only vets who *asked*
+              # for the review, not whose code it is. Stay on the default branch.
+              echo "::warning::Fork PR: reviewing the default branch, not the PR head." \
+                   "File reads describe the base branch — rely on the diff." \
+                   "See mriechers/github-actions#22."
+            elif printf '%s' "$head_sha" | grep -qE '^[0-9a-f]{40}$'; then
+              # Same-repo PR: the head is our own code, trusted to the same degree as
+              # the default branch. Pin the SHA rather than a ref name so nothing
+              # from the event payload reaches the checkout.
+              ref="$head_sha"
+            else
+              echo "::warning::Could not resolve a head SHA for #${PR_NUMBER};" \
+                   "falling back to the default branch."
+            fi
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          # Empty => actions/checkout's default (the triggering ref). Set only for a
+          # same-repo PR, where it is that PR's head SHA.
+          ref: ${{ steps.target.outputs.ref }}
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
