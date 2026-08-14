@@ -58,6 +58,24 @@ There is no local test harness. Validate workflow YAML with `actionlint` (a
 run `actionlint` by hand after any other kind of edit); end-to-end proof
 requires a real PR in a consumer repo pinned to the new SHA.
 
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues on `mriechers/github-actions`, managed with the
+`gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` and `docs/adr/` at the repo root. Neither exists
+yet, and that is fine: they are created lazily, when a term or decision
+actually needs pinning down. See `docs/agents/domain.md`.
+
 ## Commit conventions
 
 Conventional Commits (`feat:`, `docs:`) with an explanatory body, plus trailers:
