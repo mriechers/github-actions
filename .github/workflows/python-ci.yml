@@ -154,4 +154,10 @@ jobs:
       - name: Run tests
         env:
           TEST_PATHS: ${{ inputs.test-paths }}
-        run: pytest -q --tb=short $TEST_PATHS
+        run: |
+          # TEST_PATHS intentionally relies on word-splitting and globbing —
+          # it's a space-separated list of paths/globs (see the reusable
+          # workflow's usage example above, e.g. "tests/ services/*/tests/").
+          # Quoting would collapse it to one literal, unexpanded argument.
+          # shellcheck disable=SC2086
+          pytest -q --tb=short $TEST_PATHS
