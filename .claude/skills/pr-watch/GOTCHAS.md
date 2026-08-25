@@ -114,10 +114,10 @@
   individual verdict and check it against reality — "is this skill *actually* undelivered?" —
   before endorsing the aggregate.
 - **A mirror file's internal consistency is not evidence about the thing it mirrors.** On a
-  tracked copy of a Tailscale ACL I verified the HuJSON parsed, `src` was correctly scoped, and
-  the port matched the service. All true; the file described a per-tag enforcement model that
-  had **never been applied** to the live tailnet. The enforcing source (the admin console) was
-  unreachable from the review. When a file declares itself a mirror of an external source of
+  tracked copy of an external access-control config I verified it parsed, the scoping was
+  correct, and the port matched the service. All true; the file described an enforcement model
+  whose live counterpart the review had no way to reach — the enforcing source sat behind an
+  admin console unavailable from here. When a file declares itself a mirror of an external source of
   truth, say plainly in the review that the enforcing side is unverifiable from here — a clean
   parse otherwise reads as assurance it hasn't earned.
 - **Resolve file-list claims against the PR's base, never the inter-review delta.** "What changed
