@@ -2,7 +2,7 @@
 name: ship-watch
 description: >
   Author-side team leader — the mirror of /pr-watch. A manually invoked Leader that
-  listens for your own open PRs carrying reviewer verdicts and assigns each REPO a
+  scans your own open PRs carrying reviewer verdicts and assigns each REPO a
   dedicated persistent Sonnet "shipwright" that drives that repo's PRs to ship:ready.
   Nits ship unattended; blockers stop for your approval. Never merges. Triggers on
   "ship watch", "watch my PRs for feedback", "drive my PRs to merge-ready", "work the
