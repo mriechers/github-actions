@@ -198,3 +198,23 @@
   concluding the scanner dropped something, subtract the archived set (the round-state file keeps
   it as `unreviewable_archived[]`); reconcile the two numbers explicitly rather than treating
   either as ground truth.
+
+## A PR opened before the workflow existed will not pick it up (fleet rollout, 2026-08-27)
+**What went wrong:** After committing `.github/workflows/claude-code-review.yml` to `machine-ops` main, adding the `claude-review` label to the already-open PR #10 produced **no run at all**. The workflow was registered and `active`, the label was applied, and nothing happened. Removing and re-adding the same label fired it immediately.
+**Why it happened:** for `pull_request` events GitHub evaluates the workflow from the PR's **merge ref** (head merged into base). A PR opened before the file landed on base carries a merge ref computed without it, and GitHub does not recompute on its own just because base moved. The first `labeled` event was therefore evaluated against a workflow set that did not include the new file. The second one, arriving after the ref had been refreshed, saw it.
+**Don't:** conclude a freshly rolled-out workflow is broken because an existing PR ignores it — and don't go debugging scopes, secrets, or `workflow.state` (all three looked correct here). **Do:** force a fresh event — remove and re-add the label, push a commit, or close/reopen — then check again. This affects every in-flight PR in a fleet rollout, not just one: 45 repos adopted this workflow in one pass, and every PR already open in them has the same stale merge ref.
+
+## `gh api --jq` prints its error body to STDOUT, so "not found" is a non-empty string (2026-08-27)
+**What went wrong:** A fleet script tested for an existing file with `existing=$(gh api "repos/$r/contents/$p" --jq .sha 2>/dev/null)` and branched on `[[ -n "$existing" ]]`. On a missing file that variable holds the **127-character 404 JSON body**, not an empty string, so all 46 repos were classified "file exists" and would have had that blob passed back as `sha=` in the PUT.
+**Why it happened:** `gh` writes the error payload to stdout, not stderr; `2>/dev/null` hides the human-readable `gh: Not Found (HTTP 404)` line while leaving the JSON in the capture. The failure is loud when it lands (422), but the *diagnosis* points at the wrong thing entirely.
+**Don't:** treat a `gh api` capture's emptiness as a proxy for success. **Do:** branch on the exit code — `if existing=$(gh api ... 2>/dev/null); then :; else existing=""; fi`.
+
+## 404 vs 409 on a workflow-file write mean opposite things (2026-08-27)
+**What went wrong:** Rolling a workflow file to 46 repos, every write returned **404** and the script logged "branch protection?". Wrong: 404 meant the token had no `workflow` scope. After the scope was added, 3 repos returned **409** — and *that* was branch protection. The same log line was wrong in both directions across two runs.
+**Why it happened:** GitHub returns **404**, not 403, when a token lacking `workflow` writes under `.github/workflows/` — deliberately hiding the path's existence. That reads as "repo doesn't exist" and sends you chasing repo names, org access, and App installs. Branch protection is a **409** with `Changes must be made through a pull request`.
+**Don't:** guess between them from a failure count. **Do:** distinguish by status code — 404 → check `gh api -i user | grep -i x-oauth-scopes` for `workflow`; 409 → route that repo through a PR instead. To confirm a suspected scope problem in one call, write a **non**-workflow file to the same repo: if that succeeds and the workflow path 404s, it is the scope, not permissions.
+
+## `gh auth status` lags a scope refresh; the live header does not (2026-08-27)
+**What went wrong:** After `gh auth refresh -s admin:org`, `gh auth status` still listed the old scopes, and the first org call failed while a second org's succeeded — which looked exactly like a per-org permissions difference. It was not; the refresh had landed and the first call raced a stale cached token.
+**Why it happened:** `gh auth status` reads `hosts.yml`, which is not re-read the instant a refresh completes.
+**Don't:** diagnose an authorization problem from `gh auth status`. **Do:** read the live value — `gh api -i user | grep -i x-oauth-scopes`. Related: the device-code flow in `gh auth refresh` needs a real interactive TTY. Run from a non-interactive pane it cannot complete the "Press Enter to open browser" step, exits having changed nothing, and leaves `gh auth status` looking untouched — indistinguishable from "the refresh failed."
