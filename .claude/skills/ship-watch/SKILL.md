@@ -1,20 +1,20 @@
 ---
 name: ship-watch
 description: >
-  Author-side team leader — the mirror of /pr-watch. A lightweight /loop Leader that
-  listens for your own open PRs carrying reviewer verdicts and assigns each REPO a
+  Author-side team leader — the mirror of /pr-watch. A manually invoked Leader that
+  scans your own open PRs carrying reviewer verdicts and assigns each REPO a
   dedicated persistent Sonnet "shipwright" that drives that repo's PRs to ship:ready.
   Nits ship unattended; blockers stop for your approval. Never merges. Triggers on
   "ship watch", "watch my PRs for feedback", "drive my PRs to merge-ready", "work the
-  review queue", or scheduled invocation via /loop.
+  review queue".
 ---
 
 # Ship Watch — author-side leader
 
-The **author** seat opposite `/pr-watch`. A lightweight **Leader** (this `/loop` session)
-listens for your own PRs that a reviewer has already ruled on, and dispatches each
-**repo** to a persistent **Sonnet shipwright** that owns that repo and drives its PRs to
-`ship:ready`.
+The **author** seat opposite `/pr-watch`. A **manually invoked** Leader scans your own
+PRs that a reviewer has already ruled on, and dispatches each **repo** to a persistent
+**Sonnet shipwright** that owns that repo and drives its PRs to `ship:ready`. One
+invocation is one pass — it does not schedule itself.
 
 `/pr-watch` posts the verdicts. `/ship-watch` consumes them. The two never call each
 other — they ping-pong through the PR itself: a shipwright's push moves the head SHA →
@@ -30,7 +30,7 @@ hard agent ceiling (see Guardrails).
 
 | Arg | Mode |
 |---|---|
-| (none, inside `/loop`) | **Tick** — scan, assign, verify, retire |
+| (none) | **Single pass** — scan, assign, verify, retire |
 | `--repo <owner/repo>` | **Scoped one-shot** — one repo, no team (good for testing) |
 | `--preview` | **Dry run** — print the work table; change nothing |
 | `--status` | Summarize the roster and in-flight PRs; change nothing |
@@ -43,7 +43,7 @@ The scan helper is `scripts/ship_scan.py` (stdlib only).
 
 `/ship-watch` reads the label taxonomy that `/pr-watch` writes, and writes `ship:ready`
 through the same helper so there is exactly one definition of the taxonomy. On the first
-tick, resolve `pr_label.py` at its deployed sibling path:
+pass, resolve `pr_label.py` at its deployed sibling path:
 
 ```bash
 ls ~/.claude/skills/pr-watch/scripts/pr_label.py
@@ -106,10 +106,10 @@ Two filters worth knowing about in a hand-written version of the prefix:
   (`pbswi-youtube-analytics#10`, `wpm-casi-self-study#1`). They cannot merge until the
   repo is unarchived, so excluding them is defensible, but it is a decision, not a no-op.
 
-## Tick (default, inside `/loop`)
+## Single pass (default)
 
-Each tick is a fresh context — the Team persists between ticks; your in-head state does
-not. Read `.ship-watch-state.json` first, every tick.
+Each pass is a fresh context — the Team persists between invocations; your in-head state
+does not. Read `.ship-watch-state.json` first, every pass.
 
 ### 1. Scan — one API call
 
@@ -119,13 +119,13 @@ python3 scripts/ship_scan.py scan --actionable-only
 
 That wraps a single `gh search prs --state=open --author=@me`, which covers every repo
 and org at once. **Do not fan out to per-repo `gh pr list`, and never read a diff in the
-Leader.** Leader ticks that stay cheap are the difference between this loop costing
+Leader.** Leader passes that stay cheap are the difference between this skill costing
 pennies and costing hundreds of dollars (see GOTCHAS → cost).
 
 Output is grouped per repo, ordered by how much actionable work each carries, with
 `agent` (the teammate name), `local_path`, `needs_clone`, and per-PR `mode`.
 
-On the **first tick**, if `.ship-watch-state.json` has no `started_at`, record one
+On the **first pass**, if `.ship-watch-state.json` has no `started_at`, record one
 (`date -u +%Y-%m-%dT%H:%M:%SZ`) and write the resolved `label_script`.
 
 ### 2. Clear the approved PRs yourself — do not spawn an agent for these
@@ -165,7 +165,7 @@ For each repo with `assign` PRs, in the order `ship_scan.py` returned (most acti
 first):
 
 1. **If the repo is already in the roster** and its teammate is alive, do not spawn a
-   second. If it gained PRs since the last tick, `SendMessage` the additions. If the
+   second. If it gained PRs since the last pass, `SendMessage` the additions. If the
    roster entry exists but the teammate is gone, respawn it and re-send the full list.
 2. **If `needs_clone`**, include `clone_url` and let the shipwright clone into
    `scratch_dir` — **not** into `~/Developer`. Adding a repo to the workspace tree is the
@@ -210,9 +210,9 @@ Keep at most **6 live shipwrights**. This is a hard ceiling, not a preference: p
 concurrent agents, spawning fails outright with `fork failed: Device not configured`, and
 6 leaves headroom for the Leader itself.
 
-Dispatch at most `6 − live` new shipwrights per tick. Enqueue the overflow in `queue[]`
+Dispatch at most `6 − live` new shipwrights per pass. Enqueue the overflow in `queue[]`
 (the scan's order is already the right priority) and `log()` what you deferred — never
-drop silently. Retiring in step 6 frees slots that pull from `queue[]` next tick.
+drop silently. Retiring in step 6 frees slots that pull from `queue[]` next pass.
 
 ### 8. Gated PRs — label them, batch the notification, don't nag
 
@@ -227,7 +227,7 @@ gh pr edit <n> --repo <repo> --add-label "ship:blocked"
 
 Remove it the moment the PR stops waiting on the user — on release
 (`--remove-label "ship:blocked"` before you `SendMessage` the shipwright to proceed), and
-on any tick where the PR is no longer in `gated[]`.
+on any pass where the PR is no longer in `gated[]`.
 
 `ship:blocked` is deliberately **not** a `review:*` state: it says nothing about the
 review verdict, so it coexists with `review:blocker` and never touches the exactly-one-
@@ -248,18 +248,18 @@ comment. The gated flow needs no record — `ship:blocked` is non-terminal; the 
 plan the shipwright posted is the evidence.
 
 Then collect every PR in `gated[]` and send **one** `PushNotification` covering all of
-them — not one per PR, and only when the set has changed since the last tick. When the
+them — not one per PR, and only when the set has changed since the last pass. When the
 user replies `proceed <repo>#<n>` (or approves in bulk), remove the label and
 `SendMessage` the owning shipwright to release that PR.
 
-### 9. End the tick
+### 9. End the pass
 
-Under `/loop` the heartbeat brings you back. **Never block waiting on a shipwright.** A
-heartbeat of 15–20 minutes suits this loop: a shipwright's round is minutes, not seconds,
-and a tight interval buys nothing but cache-write tax.
+**Never block waiting on a shipwright.** Report what was assigned and end the pass; the
+shipwrights keep working in their own contexts. Run the skill again when you want another
+pass — a shipwright's round is minutes, so re-invoking sooner than that buys nothing.
 
-Stop the loop when `budget` is reached, or when `assign` and `queue[]` are both empty and
-have been for two consecutive ticks — then `PushNotification` a summary and stop.
+The pass is done when `budget` is reached, or when `assign` and `queue[]` are both empty
+— then `PushNotification` a summary and stop.
 
 ## Scoped one-shot (`--repo <owner/repo>`)
 
@@ -291,7 +291,7 @@ Report without changing anything:
 Do **not** message teammates to build this; the PR state on GitHub is the truth and it is
 one call.
 
-## Round state (survives `/loop` ticks)
+## Round state (survives invocations)
 
 Persist to `<worktree-root>/.ship-watch-state.json`; git-exclude it with
 `echo .ship-watch-state.json >> "$(git rev-parse --git-path info/exclude)"` — that path
@@ -328,9 +328,9 @@ resolves correctly even in a worktree, where `.git` is a file.
   `review:*` state and *is* applied with `gh pr edit`, after `pr_label.py ensure`.)
 - **Only self-authored PRs.** The scan is `--author @me`; do not widen it. This drives
   your work to merge, it does not rewrite other people's PRs.
-- **One loop per session.** `/loop` supersedes pending wakeups, so `/loop ship-watch` and
-  `/loop pr-watch` cannot share a session. Run the reviewer in its own session — e.g.
-  `claude-worktree` — which is also what lets you run it on a different model.
+- **One leader per session.** `/ship-watch` and `/pr-watch` both spawn teams and should
+  not share a session. Run the reviewer in its own — e.g. `claude-worktree` — which is
+  also what lets you run it on a different model.
 
 ## When to use / not
 
@@ -344,14 +344,15 @@ resolves correctly even in a worktree, where `.git` is a file.
 The **engine is harness-neutral**: `scripts/ship_scan.py` (stdlib + `gh`),
 `prompts/shipwright.md`, `pr_label.py`, and the label protocol run under any agent with a
 shell. Only the *orchestration* uses Claude Code primitives — `TeamCreate` / `Agent()` /
-`SendMessage` / `TaskStop` (the persistent per-repo shipwrights) and `/loop` (the
-listener). Without those, run the inline equivalent: scan, then work each repo's PRs
-yourself following `prompts/shipwright.md`, looping with a shell `while` + `sleep` or
-cron. Per `non-claude-agents.md`, do it from your own git worktree.
+`SendMessage` / `TaskStop` (the persistent per-repo shipwrights). Without those, run the
+inline equivalent: scan, then work each repo's PRs yourself following
+`prompts/shipwright.md`, re-running when you want another pass. Per
+`non-claude-agents.md`, do it from your own git worktree.
 
 ## Typical use
 
 ```
-/ship-watch --preview          # see the queue first
-/loop ship-watch --budget 5    # then let it work
+/ship-watch --preview            # see the queue first
+/ship-watch --budget 5           # one pass, stop after 5 reach ship:ready
+/ship-watch --repo mriechers/the-lodge   # one repo
 ```

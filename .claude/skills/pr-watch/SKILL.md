@@ -1,19 +1,22 @@
 ---
 name: pr-watch
 description: >
-  Local reviewer half of /ship-pr. A lightweight /loop team leader that listens for open
-  PRs across your GitHub orgs and spawns one persistent Sonnet reviewer teammate per PR to
-  post agent feedback — a workstation stand-in for the claude-code-action reviewer when
-  GitHub Actions minutes are exhausted. Re-reviews automatically when a new commit lands
-  (e.g. from /ship-pr). Triggers on "pr watch", "watch my PRs", "review incoming PRs", or
-  scheduled invocation via /loop.
+  Local reviewer half of /ship-pr. Manually invoked: scans open PRs across your GitHub
+  orgs and spawns one persistent Sonnet reviewer teammate per PR to post agent feedback.
+  A deliberate second opinion alongside the claude-code-action reviewer, not a substitute
+  for it — run it when you want an off-CI read on a specific PR. Triggers on "pr watch",
+  "watch my PRs", "review incoming PRs".
 ---
 
 # PR Watch — local reviewer
 
-The **reviewer** seat opposite `/ship-pr`. A lightweight **Leader** (this `/loop` session)
-listens for in-scope open PRs and dispatches each to a persistent **Sonnet reviewer
-teammate** that posts feedback and re-reviews on every new commit. The two skills never
+The **reviewer** seat opposite `/ship-pr`. A **manually invoked** Leader scans in-scope
+open PRs and dispatches each to a persistent **Sonnet reviewer teammate** that posts
+feedback. One invocation is one pass — it does not schedule itself.
+
+> **This is not the automatic reviewer.** `claude-review.yml` is, on every repo, via the
+> `mriechers-pr-reviewer` App. This skill is the deliberate, local second opinion you
+> reach for; nothing invokes it on your behalf. The two skills never
 call each other — they ping-pong through the PR itself (a `/ship-pr` push moves the head
 SHA → the Leader notices → the teammate re-reviews).
 
@@ -21,7 +24,7 @@ SHA → the Leader notices → the teammate re-reviews).
 
 | Arg | Mode |
 |---|---|
-| (none, inside `/loop`) | **Tick** — scan + dispatch; backlog-confirm on the first tick if uncovered PRs exist |
+| (none) | **Single pass** — scan + dispatch; backlog-confirm on the first pass if uncovered PRs exist |
 | `--backlog` | **One-shot catch-up** — scan, flag uncovered PRs, confirm which to handle, dispatch |
 | `--repo <owner/repo> --pr <n>` | **Scoped one-shot** review of a single PR (no team; good for testing) |
 | `--preview` | **Dry run** — print what would be reviewed; post nothing |
@@ -49,13 +52,13 @@ for `started_at`, `backlog_done`, `roster`, and `queue`.
 | absent | leave both keys untouched — **never** reset them | continue to Step 2 |
 
 Write the state file before dispatching anything. The "absent" row is the load-bearing
-one: `/loop /pr-watch` re-invokes with **no arguments** every tick, so a tick that
-rewrites state from empty arguments would clear the rotation the user set and silently
-revert to the default voice after exactly one styled review.
+one: a bare `/pr-watch` carries **no arguments**, so a pass that rewrote state from empty
+arguments would clear a rotation set on an earlier invocation and silently revert to the
+default voice after exactly one styled review.
 
 **Step 2 — select the mode** from what remains of `$ARGUMENTS`: `--preview` → Preview;
-`--repo`+`--pr` → Scoped; `--backlog` → Backlog; `--status` → Status; otherwise → Tick
-(the `/loop` default).
+`--repo`+`--pr` → Scoped; `--backlog` → Backlog; `--status` → Status; otherwise → a
+single pass (the default).
 
 ## Voice rotation (`--voice`)
 
@@ -70,9 +73,9 @@ only: it never changes what is found, or whether something is reported.
 
 Pipe-separated entries become `voice_rotation[]` in the round-state file — parsed and
 persisted by **Step 1 of "Detect the mode"**, which is the only place that writes these
-keys. **Persisting is the whole point** — `/loop /pr-watch` re-invokes with *no arguments*
-every tick, so a flag that only lived for one invocation would style exactly one review
-and then silently revert.
+keys. **Persisting is the whole point** — a bare `/pr-watch` carries *no arguments*, so a
+flag that only lived for one invocation would style exactly one review and then silently
+revert on the next run.
 
 **Selection.** Keep a `voice_cursor` integer in round state. Before each posted review take
 `voice_rotation[voice_cursor % len(voice_rotation)]`, then increment and persist. A global
@@ -123,19 +126,20 @@ For a single PR right now, no team:
    `mriechers/the-lodge#12` → `rv-mriechers-the-lodge-12`.)
 5. Print the resulting comment URL.
 
-## Tick (default, inside `/loop`)
+## Single pass (default)
 
-Each tick is a fresh context — the Team persists between ticks; your in-head state does not.
+Each pass is a fresh context — the Team persists between invocations; your in-head state
+does not.
 
 1. **Scan:**
    ```bash
    python3 scripts/pr_scan.py scan --owners <owners> --limit 30
    ```
-   On the **first tick of the session**, if `.pr-watch-state.json` has no `started_at`,
+   On the **first pass of the session**, if `.pr-watch-state.json` has no `started_at`,
    record one now (`date -u +%Y-%m-%dT%H:%M:%SZ`). It is the baseline that separates PRs
    already open when you started from PRs opened after — only the latter are auto-adopted
    in steady state.
-2. **First tick / backlog present:** if any record has `needs_attention: true` AND you
+2. **First pass / backlog present:** if any record has `needs_attention: true` AND you
    have not yet run the backlog confirmation this session, run the **Backlog** flow below
    before auto-dispatching. (Track "backlog done" in the round-state file.)
 3. **Ensure the Team exists** (bootstrap once per session):
@@ -154,7 +158,7 @@ Each tick is a fresh context — the Team persists between ticks; your in-head s
    set in round state. Build it per § Voice rotation: take
    `voice_rotation[voice_cursor % len(voice_rotation)]`, then increment and persist
    `voice_cursor` **once per posted review**, so the rotation advances across teammates
-   and ticks rather than restarting. With no rotation set, omit the field entirely and the
+   and passes rather than restarting. With no rotation set, omit the field entirely and the
    reviewer uses its default voice. This applies to **both** dispatch paths below —
    `SendMessage` re-reviews carry it too, not just first `Agent()` spawns; a re-review that
    drops the field would silently snap back to the default voice mid-thread.
@@ -170,7 +174,7 @@ Each tick is a fresh context — the Team persists between ticks; your in-head s
      3. **Otherwise adopt only if it is genuinely new** — its `created_at` is later than
         the session's `started_at`. Pre-existing PRs (opened before `started_at`) are
         handled **only** through the Backlog confirmation, never auto-adopted here; this is
-        what stops the first steady-state tick from flooding every open PR. (Need a
+        what stops the first steady-state pass from flooding every open PR. (Need a
         specific pre-existing PR reviewed now? Use the scoped one-shot `--repo X --pr N`.)
      4. **To adopt:** write the roster entry immediately (before the review completes),
         then spawn `rv-<owner>-<name>-<n>` (Sonnet, briefed with `prompts/reviewer.md`) and
@@ -184,7 +188,7 @@ Each tick is a fresh context — the Team persists between ticks; your in-head s
      Then the PR's teammate should already exist; `SendMessage` it the new payload
      (re-review). If the teammate is gone (cold start), respawn it — the PR thread
      carries prior context. The label write needs no verdict, so it does not block the
-     tick; it closes the window where a PR keeps `review:approved` while unreviewed
+     pass; it closes the window where a PR keeps `review:approved` while unreviewed
      commits sit on top of it.
    - `action == "current"` → skip.
    - **If a teammate reports a failed label write** (per `reviewer.md` step 6), the Leader
@@ -199,16 +203,17 @@ Each tick is a fresh context — the Team persists between ticks; your in-head s
 6. **Respect the cap — pace and queue, never burst.** Keep at most 8 live teammates, and
    treat it as a **hard ceiling**: spawning past ~8–9 concurrent agents fails outright
    (`fork failed: Device not configured`), so dispatch at most `cap − live` new reviewers
-   this tick. Enqueue the overflow **oldest-first** in the round-state `queue[]` and `log()`
-   what you deferred — never drop silently. Each subsequent tick, retiring merged/closed
+   this pass. Enqueue the overflow **oldest-first** in the round-state `queue[]` and `log()`
+   what you deferred — never drop silently. Each subsequent pass, retiring merged/closed
    PRs (step 5) frees slots that pull from `queue[]`. To drain a queue **larger than the
    cap in a single pass** (a stacked-up backlog), recycle panes: verify a reviewer's marker
    is on its PR, `TaskStop` it, then spawn the next queued PR into the freed slot — see
    GOTCHAS → "Draining a backlog bigger than the cap".
-7. **End the tick.** Under `/loop` the heartbeat brings you back. Never block waiting on a
+7. **End the pass.** Report what was dispatched and stop. Reviews continue in their
+   teammates; run the skill again when you want another pass. Never block waiting on a
    review to finish.
 
-## Backlog (`--backlog`, and the first-tick gate)
+## Backlog (`--backlog`, and the first-pass gate)
 
 1. **Scan for uncovered PRs:**
    ```bash
@@ -229,7 +234,7 @@ Each tick is a fresh context — the Team persists between ticks; your in-head s
    python3 scripts/pr_label.py ensure <repo>
    gh pr edit <n> --repo <repo> --add-label "no-pr-watch"
    ```
-5. Record "backlog done" in the round-state file so later ticks go straight to steady state.
+5. Record "backlog done" in the round-state file so later passes go straight to steady state.
 
 ## Protocol records
 
@@ -242,9 +247,9 @@ record kinds, roles, precedence, findings lifecycle, terminal states — lives i
 repo's `planning/` unified spec. Labels are the query index; records are the evidence.
 The label vocabulary has exactly one definition: `scripts/pr_label.py` `TAXONOMY`.
 
-## Round state (survives `/loop` ticks)
+## Round state (survives invocations)
 
-Persist to `<worktree-root>/.pr-watch-state.json` and read it each tick; git-exclude it via
+Persist to `<worktree-root>/.pr-watch-state.json` and read it each pass; git-exclude it via
 `echo .pr-watch-state.json >> "$(git rev-parse --git-path info/exclude)"`:
 ```json
 { "started_at": "2026-07-16T12:00:00Z", "backlog_done": true,
@@ -253,9 +258,9 @@ Persist to `<worktree-root>/.pr-watch-state.json` and read it each tick; git-exc
   "voice_rotation": ["terse senior engineer", "dry and amused"], "voice_cursor": 7 }
 ```
 `voice_rotation[]` + `voice_cursor` drive `--voice`; both absent = default voice. The cursor
-is a running count of styled reviews, so it keeps advancing across ticks and sessions.
+is a running count of styled reviews, so it keeps advancing across passes and sessions.
 `queue[]` holds first-reviews that overflowed the cap (oldest-first, `repo#num`); it drains
-as live slots free — see Tick step 6 and GOTCHAS. Empty in steady state.
+as live slots free — see Single pass step 6 and GOTCHAS. Empty in steady state.
 
 ## Status (`--status`)
 
@@ -281,8 +286,11 @@ Report the current cycle without changing anything — post nothing to GitHub:
 
 ## When to use / not
 
-- **Use:** the review Action is down (Actions minutes exhausted) or you want local,
-  off-CI review of incoming PRs.
+- **Use:** you want a local, off-CI second read on incoming PRs — a different reviewer
+  with a different prompt, on demand.
+- **Not because CI is unavailable.** That premise was measured false: 777 private Actions
+  minutes against a 3,000/month allowance, never once exhausted. What actually stopped on
+  2026-08-05 was Copilot's AI credits, which is a different product.
 - **Not for:** driving your own PR to merge (that's `/ship-pr`), or merging (human-owned).
 
 ## Running under another agent (Gemini, Codex, …)
@@ -290,7 +298,7 @@ Report the current cycle without changing anything — post nothing to GitHub:
 The **engine is harness-neutral**: `scripts/pr_scan.py` (Python stdlib + `gh`),
 `prompts/reviewer.md`, and the `gh pr comment` marker protocol run under any agent with a
 shell. Only the *orchestration* above uses Claude Code primitives — `TeamCreate` /
-`Agent()` / `SendMessage` (the persistent per-PR teammates) and `/loop` (the listener).
+`Agent()` / `SendMessage` (the persistent per-PR teammates).
 Without those, run the **inline** equivalent — same behavior, no teammates:
 
 1. `python3 scripts/pr_scan.py scan --owners <owners> --limit 30` → JSON records.
@@ -302,8 +310,9 @@ Without those, run the **inline** equivalent — same behavior, no teammates:
    SHA). You are the reviewer — no sub-agent needed. If `voice_rotation[]` is set in round
    state, select and advance the cursor yourself (see § Voice rotation) and apply
    `prompts/reviewer.md` § Voice — including its invariants.
-4. Loop however your harness loops — a shell `while` + `sleep`, `cron`, or your native agent
-   loop — instead of `/loop`.
+4. Re-run when you want another pass. Do not wrap this in a scheduler: the automatic
+   reviewer is `claude-review.yml`, and a second unattended writer on the same PR is the
+   condition this skill was deliberately taken out of.
 
 Dedup, backlog flagging, and the marker contract are identical across harnesses because
 they live in `pr_scan.py` and the PR thread, not in any agent runtime. Per
@@ -312,6 +321,7 @@ they live in `pr_scan.py` and the PR thread, not in any agent runtime. Per
 ## Typical use
 
 ```
-/pr-watch --backlog        # clear the catch-up queue first
-/loop pr-watch             # then listen all day
+/pr-watch --backlog                          # clear the catch-up queue
+/pr-watch --repo mriechers/the-lodge --pr 42 # one specific PR
+/pr-watch                                    # one pass over what's open
 ```
