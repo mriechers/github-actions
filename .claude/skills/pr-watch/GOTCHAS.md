@@ -1,5 +1,12 @@
 # pr-watch — GOTCHAS
 
+> **Format note.** Entries below the "2026-08-27" divider use the
+> `## Title` + **What went wrong / Why it happened / Don't / Do** template that
+> `start/GOTCHAS.md` (33 entries) and `ship-pr/GOTCHAS.md` (19 entries) already use
+> exclusively — this file's flat-bullet style was the family outlier, not the standard.
+> New entries use the structured form. The legacy bullets are still accurate and are
+> being converted separately rather than in a docs PR about something else.
+
 - **Dedup lives in the PR thread, not a local file.** The `<!-- pr-watch: sha=<head> -->`
   marker on the newest review comment is the source of truth. Losing the round-state file
   or the Team is safe — a cold start re-derives coverage from markers.
@@ -198,6 +205,9 @@
   concluding the scanner dropped something, subtract the archived set (the round-state file keeps
   it as `unreviewable_archived[]`); reconcile the two numbers explicitly rather than treating
   either as ground truth.
+
+---
+<!-- 2026-08-27: structured-entry format begins here -->
 
 ## A PR opened before the workflow existed will not pick it up (fleet rollout, 2026-08-27)
 **What went wrong:** After committing `.github/workflows/claude-code-review.yml` to `machine-ops` main, adding the `claude-review` label to the already-open PR #10 produced **no run at all**. The workflow was registered and `active`, the label was applied, and nothing happened. Removing and re-adding the same label fired it immediately.
