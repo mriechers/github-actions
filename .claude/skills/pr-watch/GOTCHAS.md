@@ -35,6 +35,8 @@
   commits land during the outage. To force a review of any specific PR regardless of the
   baseline, use the scoped one-shot `--repo <owner/repo> --pr <n>`.
 - **Inline-Leader review is the reliable default; teammates are a volume-only escalation.**
+  *(⚠ Superseded — see the "stale" entry near the bottom of this file. Two more recent
+  sessions found teammates fully reliable; don't follow this entry's recommendation.)*
   In a long `/loop` run the named Sonnet reviewer teammates went **silent — alive but never
   posting a comment *or* a reply** (a stronger failure than the "idle without relaying" case
   in the recycle pattern above; the suspected trigger was a mid-session MCP disconnect that
@@ -132,3 +134,40 @@
   different cause). Happened three times in one session despite being noticed twice. Write the
   review with a placeholder, then substitute from `gh pr view <n> --json headRefOid -q .headRefOid`
   with an assertion that the substitution landed, immediately before posting.
+- **The `outcome` field in a `pr-review:v1` record is a free-text judgment call, and
+  reviewers get it wrong.** In one dispatch batch, two independent teammates
+  (`crows-nest#167`, `pbswi#226`) each tagged a `Medium` finding but wrote
+  `"outcome":"nits"` in the record instead of `"blocker"` — likely reading "nits" as
+  "this finding feels minor" rather than the strict taxonomy (any High/Medium →
+  blocker, regardless of how small the underlying issue reads). The GitHub *label* was
+  still correct in both cases (`pr_label.py` computes it independently from severities
+  at label-write time), so nothing user-facing broke — but `pr_record.py`'s
+  `current_verdict()` reads the `outcome` field directly, so any future consumer of the
+  record instead of the label would get misled. Filed as
+  [github-actions#30](https://github.com/mriechers/github-actions/issues/30); until
+  `reviewer.md` is tightened to require `outcome == verdict_from_findings(severities)`,
+  trust the label over the record's `outcome` field when the two might disagree.
+- **Don't recommend `CronCreate` as pr-watch's scheduling mechanism — it's session-scoped.**
+  An earlier edit to this SKILL.md's "Typical use" section suggested defaulting to
+  `CronCreate` instead of a bare `/loop` to dodge the cache-TTL cost (see
+  [[feedback-loop-interval-cache-ttl]]). A pr-watch reviewer teammate caught this as
+  wrong on its own PR: `CronCreate` jobs are session-only (die when the session exits)
+  and auto-expire after 7 days regardless — directly contradicting "listen all day," and
+  not actually what the cited memory recommends (that memory says an explicit sub-60m
+  `/loop` interval, never `CronCreate`). The **real** fix for the idle-tick cost is
+  already designed: [[project-pr-watch-daemon]] — a launchd job that runs `pr_scan.py`
+  outside the model entirely and only spins up Claude when there's real work (spec on
+  branch `feat/pr-watch-daemon` in `the-lodge`, approved, not yet implemented). Until
+  that daemon exists, the interim guidance is an explicit sub-60m `/loop` interval, not
+  `CronCreate`.
+- **"Inline-Leader review is the reliable default" (an earlier entry above) is stale —
+  don't follow it.** That entry was written after a run where teammates went silent
+  (suspected MCP disconnect). Two more recent sessions (2026-08-11 and a full-day
+  `/loop` run right after) dispatched 20+ reviewer teammates across many ticks with
+  **zero** silent-teammate failures — every dispatch posted within ~1-2 minutes and was
+  independently re-verified against GitHub. Per the user's explicit 2026-08-11
+  correction ([[feedback-pr-watch-loop-norms]]): **default to spawning one Sonnet
+  reviewer teammate per PR and keep the Leader supervisory** — verify markers/labels
+  on-thread, take a review over inline only if a teammate's marker hasn't landed within
+  ~2 min. Don't revert to reviewing inline by default on the strength of that older
+  entry; it describes a failure mode that hasn't reproduced since.
