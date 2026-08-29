@@ -171,3 +171,30 @@
   on-thread, take a review over inline only if a teammate's marker hasn't landed within
   ~2 min. Don't revert to reviewing inline by default on the strength of that older
   entry; it describes a failure mode that hasn't reproduced since.
+- **`resolved` is not a finding status — `fixed` is, and the prompt's own prose says the wrong
+  word.** Reconciling a prior finding on a re-review, `pr_record.serialize` refuses the whole
+  record with `unknown status 'resolved'`. The accepted set lives only in
+  `scripts/pr_record.py:62` — `open | fixed | contested | deferred | superseded | redesign` —
+  while `reviewer.md` Step 4 tells you to reconcile findings as *"resolved"* / *"still open"*,
+  so the natural translation from its prose into Step 5's field is the one value that cannot
+  work. The template spells out `outcome`'s options (`approved|nits|blocker|inconclusive`) and
+  not `status`'s, which is the asymmetry that hides it. Failing loudly is the right behavior,
+  but it fires *after* the review is written — use `fixed`, and read the constant rather than
+  the prose. Tracked as `mriechers/github-actions#38`.
+- **A truncated scan and a complete scan look identical — check whether `--limit` is binding.**
+  The "scan wide" entry above says to raise the limit; it does not say how to know the raised
+  limit is still too low. If the returned record count **equals** `--limit`, the window is
+  provably binding and older PRs are invisible to every tick. Measured 2026-08-23: `--limit 120`
+  returned exactly 120→124 records against 138 real open PRs, and had already been raised once
+  from 50 for the same reason — bumping the number as it bites is not convergent while the fleet
+  grows. The failure is silent and directional: it can only ever *under*-report, so the loop
+  reports healthy while genuinely-unreviewed work is never seen. Tracked as
+  `mriechers/github-actions#39`.
+- **`gh search prs` counts archived-repo PRs; the scanner excludes them — the totals are
+  *supposed* to differ.** Cross-checking the scan against `gh search prs --owner … --state open`
+  showed 138 vs 124, which reads as a 14-PR scan miss. It wasn't: 14 of those live in archived
+  repos the scanner correctly skips, and separately 4 real PRs *were* windowed out — two opposite
+  errors that nearly cancel, which is what made the gap confusing rather than obvious. Before
+  concluding the scanner dropped something, subtract the archived set (the round-state file keeps
+  it as `unreviewable_archived[]`); reconcile the two numbers explicitly rather than treating
+  either as ground truth.
