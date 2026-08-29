@@ -69,7 +69,9 @@ feedback from earlier commits.
 
 ### 2. Read the latest review — all three surfaces
 A review can land in three places. Read **all** of them, or you'll silently miss
-findings:
+findings. **Re-read them immediately before you push, too** — a round takes many
+minutes, and a second reviewer can submit while you're mid-fix. A check from the
+top of the round is stale by the time you commit.
 ```bash
 # top-level issue comments (the per-commit Action posts its verdict here)
 gh pr view <n> --repo <r> --json comments --jq '.comments[-1] | "\(.author.login) \(.createdAt)\n\(.body)"'
@@ -161,8 +163,22 @@ push-back count feeds the guardrail (see below).
 
 ### 7. Wait for the re-review
 The review job takes ~2–3 min. Under `/loop`, end the turn (schedule the heartbeat);
-the next tick re-reads the verdict. Outside `/loop`, poll `gh pr view … comments`
-until a comment newer than your push appears.
+the next tick re-reads the verdict.
+
+Outside `/loop`, **do not poll for a new comment to appear** — the reviewer posts a
+placeholder ("Review in progress") the moment it starts and then **edits that same
+comment in place** with the verdict. `createdAt` never moves, so a watcher keyed on
+new comments waits forever while the verdict sits in a comment it already saw.
+Length is no better a signal: the placeholder checklist is several hundred
+characters on its own. Poll the **body** of the newest comment until it settles:
+
+```bash
+# finished bodies start with "Claude finished"; in-flight ones say "Review in progress"
+gh api repos/<owner>/<repo>/issues/<n>/comments --jq 'sort_by(.updated_at) | last | .body'
+```
+
+(GOTCHAS.md has said this since 2026-07-22 — it's here now so step 7 stops
+contradicting it.)
 
 ## Done (merge-ready)
 
