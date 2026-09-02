@@ -34,19 +34,30 @@ Consumers pin a **full commit SHA** (with a `# v1` comment), never the moving ta
 - `claude-review.yml` guards `labeled` events against `inputs.review_label`; every
   other trigger always runs. Preserve that shape when touching the `if:`.
 
-## Releasing (propagation lives in `the-lodge`)
+## Releasing (propagation lives in `scripts/fleet-sweep/`)
 
 1. Commit here and verify.
 2. Optionally `git tag -f v1 && git push -f origin v1` (cosmetic pointer).
-3. Bump the SHA in both stubs at
-   `~/Developer/the-lodge/scripts/claude-workflow-migration/stubs/` — they must stay
-   **byte-identical** to the-lodge's own workflows.
-4. `DRY=1 ./sweep.sh` to preview, then the real sweep.
+3. Bump the SHA in **all three** stubs at `scripts/fleet-sweep/stubs/`. They must
+   agree — `sweep.sh`'s preflight refuses a run where they disagree, and the
+   absence of that check is what let the interactive pin sit 21 commits stale
+   fleet-wide (#37).
+4. `DRY=1 ./scripts/fleet-sweep/sweep.sh` to preview, then the real sweep.
+5. `./scripts/fleet-sweep/status.sh` to confirm what actually landed.
 
-**`sweep.sh` and `pause-claude-actions.sh` are fleet writes — Mark runs them via `!`.
-The classifier blocks agent fleet writes; never attempt them yourself.** The sweep's
+**`sweep.sh` and `pause.sh` are fleet writes — Mark runs them via `!`. The
+classifier blocks agent fleet writes; never attempt them yourself.** The sweep's
 skip-check matches the target SHA, so stale repos update and current ones skip. It is
 the propagation and bump tool — no Dependabot.
+
+The sweep's scope is **derived** at runtime from `owners.txt`, not committed. A
+repo list here would name private repos in a public repo, and a hand-maintained
+allowlist fails open — the predecessor drifted to 49 rows against ~104 live
+repos. Adding an owner enrolls its repos; `exclude.txt` opts one out.
+
+**The host repo cannot be swept.** The stub filenames collide with the reusables
+this repo hosts — `floor.yml` here *is* the reusable. `sweep.sh` refuses it
+regardless of `exclude.txt`.
 
 See `/release-reusable` for the full walkthrough.
 
