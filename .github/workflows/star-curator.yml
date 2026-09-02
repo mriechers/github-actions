@@ -1,0 +1,147 @@
+name: Star curator (reusable)
+
+# Reconciles the calling user's starred repositories against their star Lists:
+# files the unambiguous ones, and opens one issue reporting everything that
+# needs a human decision.
+#
+# Why the engine is here and the taxonomy is not: someone's list taxonomy and
+# their keep-list are personal, and this repo is public. The caller supplies a
+# rules file from its own checkout, so nothing about a particular collection is
+# published here. See docs/agents/star-curator.md for the rules format.
+#
+# Why a PAT and not GITHUB_TOKEN: star Lists belong to a *user*, and the
+# built-in Actions token is a repo-scoped installation token with no user
+# identity — it cannot read or write them at any permission level. The caller
+# forwards its own PAT (scopes: `user`, plus `repo` for private-repo stars),
+# exactly as callers forward CLAUDE_CODE_OAUTH_TOKEN elsewhere in this repo.
+#
+# Consumers add .github/workflows/star-curator.yml:
+#
+#   name: Star curator
+#   on:
+#     schedule:
+#       - cron: '0 13 * * 1'   # Mondays, 13:00 UTC
+#     workflow_dispatch:
+#       inputs:
+#         dry-run:
+#           type: boolean
+#           default: true
+#   jobs:
+#     curate:
+#       permissions:
+#         contents: read
+#         issues: write        # the report lands as an issue on the caller
+#       uses: mriechers/github-actions/.github/workflows/star-curator.yml@<sha>
+#       with:
+#         dry-run: ${{ inputs.dry-run || false }}
+#       secrets:
+#         stars-token: ${{ secrets.STARS_TOKEN }}
+#
+# The permissions block must live in the caller — a reusable can only downgrade
+# the token it is handed, never widen it.
+
+on:
+  workflow_call:
+    inputs:
+      rules-path:
+        description: >-
+          Path, in the calling repo, to the star rules file (YAML or JSON).
+        required: false
+        type: string
+        default: .github/star-rules.yml
+      dry-run:
+        description: >-
+          Report what would be filed without writing anything. The engine never
+          unstars or creates lists regardless; this also suppresses filing.
+        required: false
+        type: boolean
+        default: false
+      issue-label:
+        description: Label applied to the report issue, and used to find the prior one to close.
+        required: false
+        type: string
+        default: star-curation
+      engine_ref:
+        description: >-
+          Override the ref this workflow's engine is checked out from. Empty
+          uses github.job_workflow_sha, so a re-pin moves the workflow and its
+          engine together, atomically. A fallback for the case where
+          job_workflow_sha regresses.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      stars-token:
+        description: PAT with `user` scope (and `repo` to see private-repo stars).
+        required: true
+
+jobs:
+  curate:
+    name: Reconcile stars against lists
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller (for the rules file)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout curation engine
+        # Same SHA the consumer pinned this workflow to, so the engine and the
+        # workflow that drives it can never disagree about their contract.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: mriechers/github-actions
+          ref: ${{ inputs.engine_ref != '' && inputs.engine_ref || github.job_workflow_sha }}
+          path: .engine
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Curate
+        id: curate
+        env:
+          # The PAT reaches only this step. Nothing else in the job needs it,
+          # and it must never land in .git/config for later steps to inherit.
+          STARS_TOKEN: ${{ secrets.stars-token }}
+          # Every caller-supplied value crosses into the shell as an environment
+          # variable, never as a `${{ }}` splice into the script body. These are
+          # workflow_call inputs rather than event payload, so the trust boundary
+          # is softer than the classic injection case — but a reusable workflow
+          # is precisely where an unsafe habit would get copied.
+          RULES_PATH: ${{ inputs.rules-path }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          args=(--rules "$RULES_PATH" --report "$RUNNER_TEMP/star-report.md")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python3 .engine/scripts/star_curator.py "${args[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Close the previous report
+        # One open report at a time: a clean run leaves nothing behind, so an
+        # open issue always means there is something outstanding right now.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          gh issue list --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
+            --state open --json number --jq '.[].number' \
+          | while read -r n; do
+              [ -n "$n" ] && gh issue close "$n" --repo "$GITHUB_REPOSITORY" \
+                --comment "Superseded by a newer star curation run."
+            done
+
+      - name: Open the report
+        if: steps.curate.outputs.has_findings == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Star curation: $(date -u +%Y-%m-%d)" \
+            --label "$LABEL" \
+            --body-file "$RUNNER_TEMP/star-report.md"
+
+      # The report body is built from repo descriptions written by third
+      # parties. It is only ever passed through --body-file, never spliced into
+      # a shell command, so a repo described as `$(...)` stays inert text.
+
