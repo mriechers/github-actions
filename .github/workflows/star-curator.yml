@@ -112,7 +112,14 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           args=(--rules "$RULES_PATH" --report "$RUNNER_TEMP/star-report.md")
-          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          # `if` rather than `[ ... ] && args+=(...)`. The bare && form works
+          # here — bash's errexit exempts a failing command that is not the
+          # last in an AND-OR list — but it silently becomes a step-killer the
+          # day someone moves it to the end of this block. Not worth leaving
+          # armed for a one-word saving.
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
           python3 .engine/scripts/star_curator.py "${args[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 

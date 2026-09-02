@@ -107,22 +107,55 @@ def fetch_stars(token: str) -> list[dict]:
     return stars
 
 
-def fetch_lists(token: str) -> dict[str, dict]:
-    """{list name: {"id": ..., "items": {full_name, ...}}}"""
-    query = """
-    { viewer { lists(first: 50) { nodes {
+LISTS_Q = """
+query($after: String) { viewer { lists(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
         id name
-        items(first: 100) { nodes { ... on Repository { nameWithOwner } } }
-    } } } }
-    """
-    nodes = graphql(token, query)["viewer"]["lists"]["nodes"]
-    return {
-        n["name"]: {
-            "id": n["id"],
-            "items": {i["nameWithOwner"] for i in n["items"]["nodes"] if i},
+        items(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            nodes { ... on Repository { nameWithOwner } }
         }
-        for n in nodes
     }
+} } }
+"""
+
+LIST_ITEMS_Q = """
+query($id: ID!, $after: String) { node(id: $id) { ... on UserList {
+    items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ... on Repository { nameWithOwner } }
+    }
+} } }
+"""
+
+
+def fetch_lists(token: str) -> dict[str, dict]:
+    """{list name: {"id": ..., "items": {full_name, ...}}}
+
+    Both connections are paginated, and that is not defensive tidiness. The
+    result is the "already filed" set the engine uses to decide what to leave
+    alone. A member that fell off an unpaginated first page would look unfiled,
+    so the engine would file it — and `updateUserListsForItem` replaces rather
+    than appends, so it would be silently dropped from every other list it was
+    in. A read cap here becomes data loss, not a missing row.
+    """
+    lists: dict[str, dict] = {}
+    cursor = None
+    while True:
+        conn = graphql(token, LISTS_Q, {"after": cursor})["viewer"]["lists"]
+        for n in conn["nodes"]:
+            items = {i["nameWithOwner"] for i in n["items"]["nodes"] if i}
+            page = n["items"]["pageInfo"]
+            while page["hasNextPage"]:
+                more = graphql(token, LIST_ITEMS_Q, {"id": n["id"], "after": page["endCursor"]})
+                more = more["node"]["items"]
+                items |= {i["nameWithOwner"] for i in more["nodes"] if i}
+                page = more["pageInfo"]
+            lists[n["name"]] = {"id": n["id"], "items": items}
+        if not conn["pageInfo"]["hasNextPage"]:
+            return lists
+        cursor = conn["pageInfo"]["endCursor"]
 
 
 def route(repo: dict, rules: dict) -> list[str]:

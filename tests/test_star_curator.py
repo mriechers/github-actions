@@ -1,15 +1,25 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import star_curator  # noqa: E402
 from star_curator import (  # noqa: E402
     REQUIRED_MUTATIONS,
     build_report,
+    fetch_lists,
     rot_signals,
     route,
 )
+
+
+def _items(names, has_next=False, cursor=None):
+    return {
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": [{"nameWithOwner": n} for n in names],
+    }
 
 
 def repo(full_name="o/r", description="", topics=(), pushed_at="2026-01-01", archived=False):
@@ -97,6 +107,67 @@ class TestReport(unittest.TestCase):
     def test_multi_match_names_the_candidates(self):
         out = build_report([], [(repo(full_name="a/b"), ["X", "Y"])], [], [], False)
         self.assertIn("matches X, Y", out)
+
+
+class TestFetchListsPagination(unittest.TestCase):
+    """A member missed here looks unfiled, and filing it REPLACES its
+    membership — so a read cap is data loss, not a missing row."""
+
+    def test_items_beyond_the_first_page_are_collected(self):
+        pages = [
+            {
+                "viewer": {
+                    "lists": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [
+                            {"id": "L1", "name": "Big", "items": _items(["a/1"], True, "c1")}
+                        ],
+                    }
+                }
+            },
+            {"node": {"items": _items(["a/2"], True, "c2")}},
+            {"node": {"items": _items(["a/3"])}},
+        ]
+        with mock.patch.object(star_curator, "graphql", side_effect=pages):
+            out = fetch_lists("tok")
+        self.assertEqual(out["Big"]["items"], {"a/1", "a/2", "a/3"})
+
+    def test_lists_beyond_the_first_page_are_collected(self):
+        pages = [
+            {
+                "viewer": {
+                    "lists": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "p1"},
+                        "nodes": [{"id": "L1", "name": "One", "items": _items(["a/1"])}],
+                    }
+                }
+            },
+            {
+                "viewer": {
+                    "lists": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [{"id": "L2", "name": "Two", "items": _items(["b/2"])}],
+                    }
+                }
+            },
+        ]
+        with mock.patch.object(star_curator, "graphql", side_effect=pages):
+            out = fetch_lists("tok")
+        self.assertEqual(sorted(out), ["One", "Two"])
+        self.assertEqual(out["Two"]["items"], {"b/2"})
+
+    def test_single_page_makes_no_follow_up_query(self):
+        page = {
+            "viewer": {
+                "lists": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{"id": "L1", "name": "Small", "items": _items(["a/1"])}],
+                }
+            }
+        }
+        with mock.patch.object(star_curator, "graphql", side_effect=[page]) as g:
+            fetch_lists("tok")
+        self.assertEqual(g.call_count, 1)
 
 
 class TestSafetyContract(unittest.TestCase):
