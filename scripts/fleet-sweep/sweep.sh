@@ -29,7 +29,17 @@ INTERACTIVE=".github/workflows/claude.yml"
 REVIEW=".github/workflows/claude-code-review.yml"
 FLOOR=".github/workflows/floor.yml"
 
-MSG=$'chore: use central reusable Claude workflows + CI floor\n\nPoints this repo\047s Claude workflows and secrets floor at the shared\nmriechers/github-actions reusables, SHA-pinned.\n\nAgent: fleet-sweep\nMachine: studio\nCo-Authored-By: Claude <noreply@anthropic.com>'
+# Machine is resolved at run time, not baked in. This trailer is written to
+# every repo the sweep touches, so a hard-coded hostname would put a false
+# provenance claim in ~250 commits the moment anyone ran it from another box.
+MSG="chore: use central reusable Claude workflows + CI floor
+
+Points this repo's Claude workflows and secrets floor at the shared
+mriechers/github-actions reusables, SHA-pinned.
+
+Agent: fleet-sweep
+Machine: $(hostname -s)
+Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # ── Preflight ──────────────────────────────────────────────────────────────
 # The predecessor compared each stub byte-for-byte against the-lodge's own
@@ -142,14 +152,29 @@ put_file() {  # repo path localfile branch
 }
 
 process_repo() {  # repo branch protected
-  local repo="$1" branch="$2" protected="$3" br base rc=0
+  local repo="$1" branch="$2" protected="$3" br base mkerr rc=0
   if [ "$protected" = yes ]; then
     br="chore/reusable-claude-workflows"
     if [ "$DRY" = 1 ]; then
       echo "  DRY would create branch $br and open a PR to $branch"
     else
-      base=$(gh api "repos/$repo/git/ref/heads/$branch" --jq '.object.sha')
-      gh api --method POST "repos/$repo/git/refs" -f ref="refs/heads/$br" -f sha="$base" >/dev/null 2>&1 || true
+      # An unresolved base or a swallowed creation error used to surface three
+      # steps later as an opaque PUT failure — or, worse, silently write onto
+      # whatever $br already pointed at. Both cases are named here instead.
+      if ! base=$(gh api "repos/$repo/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null) || [ -z "$base" ]; then
+        echo "  ✗ could not resolve base branch '$branch' — skipping repo"
+        return 1
+      fi
+      if gh api "repos/$repo/git/ref/heads/$br" >/dev/null 2>&1; then
+        # Left as-is rather than force-reset: this branch usually backs an open
+        # PR from a prior release, and discarding its history is not the
+        # sweep's call to make.
+        echo "  ~ $br already exists — writing onto it (prior sweep's branch)"
+      elif ! mkerr=$(gh api --method POST "repos/$repo/git/refs" \
+             -f ref="refs/heads/$br" -f sha="$base" 2>&1 >/dev/null); then
+        echo "  ✗ could not create $br — $(printf '%s' "$mkerr" | tr '\n' ' ' | head -c 120)"
+        return 1
+      fi
     fi
     put_file "$repo" "$INTERACTIVE" "$STUB_I" "$br" || rc=1
     put_file "$repo" "$REVIEW" "$STUB_R" "$br" || rc=1
