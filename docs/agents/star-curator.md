@@ -37,9 +37,16 @@ stale_before_year: 2023
 # Lists larger than this get flagged as drift.
 oversize: 30
 
-# Silence rot signals for repos kept deliberately. An archived repo that is
-# still the canonical reference for something belongs here — without it the
-# report nags about the same decisions every week and stops being read.
+# Exempt whole lists whose members are old on purpose — an archive of a dead
+# platform, a deliberately historical collection. Cheaper and more honest than
+# enumerating every member in `keep`.
+keep_lists:
+  - Front-End Frameworks
+  - The Webhook CMS (2013-2025)
+
+# Silence rot signals for individual repos kept deliberately. An archived repo
+# that is still the canonical reference for something belongs here — without it
+# the report nags about the same decisions every week and stops being read.
 keep:
   - opawg/user-agents          # archived, still the podcast analytics UA reference
   - PRX/publish.prx.org        # archived repo, Dovetail is alive

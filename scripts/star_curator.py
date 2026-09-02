@@ -180,9 +180,20 @@ def route(repo: dict, rules: dict) -> list[str]:
     return matches
 
 
-def rot_signals(stars: Iterable[dict], rules: dict) -> list[tuple[str, str]]:
-    """(full_name, reason) for repos showing decay, minus explicitly-kept ones."""
+def rot_signals(
+    stars: Iterable[dict], rules: dict, lists: dict[str, dict] | None = None
+) -> list[tuple[str, str]]:
+    """(full_name, reason) for repos showing decay, minus explicitly-kept ones.
+
+    `keep_lists` exempts whole lists whose members are old on purpose — an
+    archive of a dead platform, or a deliberately historical collection. Without
+    it those repos are flagged every single week forever, and a report that
+    always contains the same forty lines is a report nobody opens.
+    """
     keep = {k.lower() for k in (rules.get("keep") or [])}
+    for name in rules.get("keep_lists") or []:
+        if lists and name in lists:
+            keep |= {n.lower() for n in lists[name]["items"]}
     cutoff = f"{rules.get('stale_before_year', 2023)}-01-01"
     out = []
     for r in stars:
@@ -294,7 +305,7 @@ def main() -> int:
         else:
             ambiguous.append((repo, matches))
 
-    rot = rot_signals(stars, rules)
+    rot = rot_signals(stars, rules, lists)
 
     oversize = int(rules.get("oversize", 30))
     drift = []

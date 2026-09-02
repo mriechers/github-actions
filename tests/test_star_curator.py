@@ -91,6 +91,18 @@ class TestRotSignals(unittest.TestCase):
     def test_fresh_repo_is_quiet(self):
         self.assertEqual(rot_signals([repo(pushed_at="2026-08-01")], RULES), [])
 
+    def test_keep_lists_exempts_a_whole_deliberately_historical_list(self):
+        rules = dict(RULES, keep_lists=["Attic"])
+        lists = {"Attic": {"id": "L1", "items": {"a/b", "c/d"}}}
+        stars = [repo(full_name="a/b", archived=True), repo(full_name="e/f", archived=True)]
+        # Only the repo outside the exempt list is reported.
+        self.assertEqual(rot_signals(stars, rules, lists), [("e/f", "archived upstream")])
+
+    def test_keep_lists_naming_a_missing_list_is_not_fatal(self):
+        rules = dict(RULES, keep_lists=["Nope"])
+        out = rot_signals([repo(full_name="a/b", archived=True)], rules, {})
+        self.assertEqual(out, [("a/b", "archived upstream")])
+
 
 class TestReport(unittest.TestCase):
     def test_clean_run_says_so(self):
