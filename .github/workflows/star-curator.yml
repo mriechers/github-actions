@@ -79,6 +79,14 @@ jobs:
   curate:
     name: Reconcile stars against lists
     runs-on: ubuntu-latest
+    # "One open report at a time" is this workflow's own promise, so it is
+    # guarded here rather than left to each caller to remember. Two overlapping
+    # runs — a manual dispatch landing on top of the cron — would each close the
+    # same prior issue and then each open a new one. Not cancel-in-progress:
+    # a half-finished run has already written to the lists, so it finishes.
+    concurrency:
+      group: star-curator-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout caller (for the rules file)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -137,7 +145,10 @@ jobs:
           # matching gh's "already exists" wording would turn an upstream
           # phrasing change into a hard failure on an idempotent no-op. This
           # way every error that reaches the create is a real one.
-          if gh label list --repo "$GITHUB_REPOSITORY" --search "$LABEL" \
+          #
+          # Listing and matching exactly, rather than `--search`, which is a
+          # substring query — the same approach pr_label.ensure() takes.
+          if gh label list --repo "$GITHUB_REPOSITORY" --limit 200 \
                --json name --jq '.[].name' | grep -qxF "$LABEL"; then
             echo "Label '$LABEL' already exists."
           else

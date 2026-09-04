@@ -45,6 +45,17 @@ class ApiError(RuntimeError):
     pass
 
 
+class ListApiGone(ApiError):
+    """The undocumented List mutations are missing from the schema.
+
+    Distinct from ApiError because it is the ONLY condition that should
+    trigger degraded mode. A 401 from an expired PAT is also an ApiError, and
+    catching the base class reported a dead token as "GitHub changed their
+    schema" — sending someone to rewrite the engine when they needed to
+    rotate a secret.
+    """
+
+
 def _request(url: str, token: str, method: str = "GET", body: dict | None = None) -> Any:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -74,7 +85,7 @@ def assert_list_api(token: str) -> None:
     available = {f["name"] for f in data["__schema"]["mutationType"]["fields"]}
     missing = [m for m in REQUIRED_MUTATIONS if m not in available]
     if missing:
-        raise ApiError(
+        raise ListApiGone(
             "GitHub's GraphQL schema no longer exposes: "
             + ", ".join(missing)
             + ". The star List API is undocumented and appears to have changed. "
@@ -170,7 +181,11 @@ def route(repo: dict, rules: dict) -> list[str]:
     haystack = " ".join([bare_name, repo["description"].lower(), " ".join(repo["topics"])])
     matches = []
     for name, spec in (rules.get("lists") or {}).items():
-        if set(spec.get("topics") or []) & topics:
+        # Lowercase the rule side, as keywords and prefixes already do. Repo
+        # topics arrive lowercased, so a capitalised `topics:` entry matched
+        # nothing at all — and the failure mode is silence: the repo lands in
+        # "needs a decision" and the rules file looks fine.
+        if {t.lower() for t in (spec.get("topics") or [])} & topics:
             matches.append(name)
             continue
         if any(k.lower() in haystack for k in (spec.get("keywords") or [])):
@@ -322,6 +337,14 @@ def load_rules(path: str) -> dict:
             f"star-curator: {path} must be a mapping with a `lists:` key, "
             f"got {type(rules).__name__}"
         )
+    lists = rules.get("lists")
+    if lists is not None and not isinstance(lists, dict):
+        # Writing `lists:` as a sequence is the natural wrong guess. Caught
+        # here rather than in route(), which runs once per starred repo.
+        raise SystemExit(
+            f"star-curator: `lists:` in {path} must be a mapping of "
+            f"list name to rules, got {type(lists).__name__}"
+        )
     return rules
 
 
@@ -346,7 +369,10 @@ def main() -> int:
     list_api_error = ""
     try:
         assert_list_api(token)
-    except ApiError as exc:
+    except ListApiGone as exc:
+        # Only a genuinely missing mutation degrades. Any other API failure —
+        # an expired token, a rate limit — propagates to the handler in
+        # __main__ and is named for what it is.
         list_api_error = str(exc)
         print(f"star-curator: {list_api_error}", file=sys.stderr)
 
@@ -410,4 +436,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except ApiError as exc:
+        # A traceback here is just noise in a job log — the useful content is
+        # the method, URL and status, which ApiError already carries.
+        raise SystemExit(f"star-curator: {exc}") from exc

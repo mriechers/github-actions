@@ -75,6 +75,13 @@ class TestRoute(unittest.TestCase):
         r = repo(description="MODEL CONTEXT PROTOCOL server")
         self.assertEqual(route(r, RULES), ["Agent tooling"])
 
+    def test_topic_rules_are_case_insensitive(self):
+        # Repo topics arrive lowercased. A capitalised rule matched nothing,
+        # and did so silently — the repo just showed up under "needs a
+        # decision" with a rules file that looked correct.
+        rules = {"lists": {"HA": {"topics": ["Home-Assistant"]}}}
+        self.assertEqual(route(repo(topics=["home-assistant"]), rules), ["HA"])
+
     def test_keywords_never_match_against_the_owner(self):
         # `prefixes` deliberately ignores the owner so `awesome-corp` cannot
         # sweep its whole output into one list. Keywords must not reopen that
@@ -259,6 +266,34 @@ class TestDegradedMode(unittest.TestCase):
         self.assertIn("a/b", out)
 
 
+class TestListApiGone(unittest.TestCase):
+    """Degraded mode must fire for a missing mutation and NOTHING else."""
+
+    def _schema(self, *mutations):
+        return {"__schema": {"mutationType": {"fields": [{"name": m} for m in mutations]}}}
+
+    def test_missing_mutation_raises_the_degrading_error(self):
+        with mock.patch.object(star_curator, "graphql", return_value=self._schema("somethingElse")):
+            with self.assertRaises(star_curator.ListApiGone):
+                star_curator.assert_list_api("tok")
+
+    def test_a_present_mutation_passes(self):
+        with mock.patch.object(
+            star_curator, "graphql", return_value=self._schema("updateUserListsForItem")
+        ):
+            star_curator.assert_list_api("tok")  # must not raise
+
+    def test_an_auth_failure_is_not_a_schema_change(self):
+        # A dead PAT must NOT be reported as "GitHub changed their schema" —
+        # that sends someone to rewrite the engine when the fix is to rotate
+        # a secret. ListApiGone is a subclass, so assert the exact type.
+        boom = star_curator.ApiError("POST /graphql -> HTTP 401: bad credentials")
+        with mock.patch.object(star_curator, "graphql", side_effect=boom):
+            with self.assertRaises(star_curator.ApiError) as cm:
+                star_curator.assert_list_api("tok")
+        self.assertNotIsInstance(cm.exception, star_curator.ListApiGone)
+
+
 class TestLoadRules(unittest.TestCase):
     def _write(self, text, suffix=".json"):
         import tempfile
@@ -272,6 +307,11 @@ class TestLoadRules(unittest.TestCase):
     def test_a_non_mapping_is_named_not_a_traceback(self):
         with self.assertRaises(SystemExit) as cm:
             star_curator.load_rules(self._write("[1, 2, 3]"))
+        self.assertIn("must be a mapping", str(cm.exception))
+
+    def test_lists_written_as_a_sequence_is_named(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write('{"lists": ["HA", "Glitch"]}'))
         self.assertIn("must be a mapping", str(cm.exception))
 
     def test_a_missing_file_is_named(self):
