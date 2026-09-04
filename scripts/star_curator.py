@@ -22,6 +22,12 @@ The List mutations used here are undocumented GitHub GraphQL — they are what
 the web UI calls, but they carry no compatibility promise. `assert_list_api()`
 fails the run loudly if they disappear, so a schema change surfaces as a red
 check rather than as a job that quietly files nothing for three months.
+
+That degraded mode covers the WRITE mutation only. Filing can be switched off
+while the read path still produces a useful report. A read-side schema change
+cannot degrade: without the lists there is no way to tell a filed repo from an
+unfiled one, and a report built on that would be worse than none — so it exits
+with a named error instead.
 """
 
 from __future__ import annotations
@@ -392,6 +398,53 @@ def load_rules(path: str) -> dict:
             f"star-curator: `lists:` in {path} must be a mapping of "
             f"list name to rules, got {type(lists).__name__}"
         )
+
+    # Every matcher is validated as a list of strings, and this is the one
+    # piece of validation that is a SAFETY control rather than a courtesy.
+    # `keywords: home assistant` — a bare scalar, the most natural YAML slip
+    # there is — leaves Python iterating the string character by character.
+    # Single-character "keywords" like `e` and ` ` substring-match nearly every
+    # repo, so the rule matches almost everything, and a single match FILES.
+    # On a real run that mass-mis-files a collection into one list, and
+    # `updateUserListsForItem` replaces membership rather than appending, so
+    # it also strips those repos out of wherever they belonged.
+    for name, spec in (lists or {}).items():
+        if not isinstance(spec, dict):
+            raise SystemExit(
+                f"star-curator: rules for `{name}` in {path} must be a mapping "
+                f"of matcher to values, got {type(spec).__name__}"
+                + (" (a list name with nothing under it)" if spec is None else "")
+            )
+        for matcher in ("topics", "keywords", "prefixes"):
+            values = spec.get(matcher)
+            if values is None:
+                continue
+            if isinstance(values, str) or not isinstance(values, (list, tuple)):
+                raise SystemExit(
+                    f"star-curator: `{matcher}` for `{name}` in {path} must be "
+                    f"a list, got {type(values).__name__}. Write "
+                    f"`{matcher}: [{values!r}]`, not `{matcher}: {values!r}`."
+                    if isinstance(values, str)
+                    else f"star-curator: `{matcher}` for `{name}` in {path} "
+                    f"must be a list, got {type(values).__name__}."
+                )
+            bad = [v for v in values if not isinstance(v, str)]
+            if bad:
+                raise SystemExit(
+                    f"star-curator: `{matcher}` for `{name}` in {path} must "
+                    f"contain only strings; found {bad[0]!r}."
+                )
+
+    oversize = rules.get("oversize")
+    if oversize is not None:
+        try:
+            int(oversize)
+        except (TypeError, ValueError):
+            raise SystemExit(
+                f"star-curator: `oversize` in {path} must be a number, "
+                f"got {oversize!r}."
+            ) from None
+
     return rules
 
 

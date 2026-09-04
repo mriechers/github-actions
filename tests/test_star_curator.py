@@ -353,6 +353,44 @@ class TestLoadRules(unittest.TestCase):
             star_curator.load_rules(self._write('{"lists": ["HA", "Glitch"]}'))
         self.assertIn("must be a mapping", str(cm.exception))
 
+    def test_a_scalar_keyword_string_is_refused(self):
+        # THE safety check. `keywords: home assistant` (no brackets) leaves
+        # Python iterating characters, so single-char keywords match nearly
+        # every repo — and a single match files. On a real run that mass-
+        # mis-files a collection into one list, and because filing replaces
+        # membership it strips those repos out of where they belonged.
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(
+                self._write('{"lists": {"HA": {"keywords": "home assistant"}}}')
+            )
+        self.assertIn("must be a list", str(cm.exception))
+
+    def test_a_scalar_topics_string_is_refused(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write('{"lists": {"HA": {"topics": "hacs"}}}'))
+        self.assertIn("must be a list", str(cm.exception))
+
+    def test_a_list_header_with_nothing_under_it_is_named(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write('{"lists": {"HA": null}}'))
+        self.assertIn("HA", str(cm.exception))
+
+    def test_a_non_string_matcher_value_is_refused(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write('{"lists": {"HA": {"topics": ["ok", 7]}}}'))
+        self.assertIn("only strings", str(cm.exception))
+
+    def test_a_non_numeric_oversize_is_named(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write('{"oversize": "lots", "lists": {}}'))
+        self.assertIn("must be a number", str(cm.exception))
+
+    def test_a_well_formed_file_passes(self):
+        rules = star_curator.load_rules(
+            self._write('{"oversize": 30, "lists": {"HA": {"topics": ["hacs"], "keywords": []}}}')
+        )
+        self.assertEqual(rules["lists"]["HA"]["topics"], ["hacs"])
+
     def test_a_missing_file_is_named(self):
         with self.assertRaises(SystemExit) as cm:
             star_curator.load_rules("/nonexistent/star-rules.yml")

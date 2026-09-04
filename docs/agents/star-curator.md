@@ -141,3 +141,13 @@ saying "nothing to report".
 A crash before the engine reaches a verdict is different: it writes no
 `has_findings` output, so nothing is opened *and* nothing is closed. The
 outstanding report survives a run that never finished.
+
+**The degraded mode covers the write mutation only.** `assert_list_api()`
+introspects `updateUserListsForItem`, and filing is the part that can be
+switched off while everything else still works. If GitHub changes the *read*
+side instead — the `viewer.lists` or `UserList.items` shape `fetch_lists()`
+depends on — there is no useful degraded run to have: without the lists, the
+engine cannot tell a filed repo from an unfiled one, and a report built on
+that would be worse than none. That case exits with a named
+`star-curator: … -> HTTP …` message rather than a traceback, and the job
+fails. Reads are essential; only writes are optional.
