@@ -61,7 +61,7 @@ on:
         required: false
         type: string
         default: star-curation
-      engine_ref:
+      engine-ref:
         description: >-
           Override the ref this workflow's engine is checked out from. Empty
           uses github.job_workflow_sha, so a re-pin moves the workflow and its
@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: mriechers/github-actions
-          ref: ${{ inputs.engine_ref != '' && inputs.engine_ref || github.job_workflow_sha }}
+          ref: ${{ inputs.engine-ref != '' && inputs.engine-ref || github.job_workflow_sha }}
           path: .engine
           fetch-depth: 1
           persist-credentials: false
@@ -123,9 +123,27 @@ jobs:
           python3 .engine/scripts/star_curator.py "${args[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Ensure the report label exists
+        # `gh issue create --label` does NOT create a missing label, it errors.
+        # Without this a brand-new consumer following the documented setup has
+        # their first findings run die after the curation work is already done.
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" \
+            --color BFD4F2 --description "Star curation report" \
+            || true   # already exists
+
       - name: Close the previous report
         # One open report at a time: a clean run leaves nothing behind, so an
         # open issue always means there is something outstanding right now.
+        #
+        # Skipped on a dry run. A preview is documented as the first thing to
+        # try, and it has no business closing the live outstanding report and
+        # throwing away whatever discussion is on it.
+        if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}
@@ -138,7 +156,11 @@ jobs:
             done
 
       - name: Open the report
-        if: steps.curate.outputs.has_findings == 'true'
+        # Also skipped on a dry run — otherwise previews pile up issues that
+        # nothing closes, now that closing is gated too. The full report is
+        # already in the job summary, so a dry run stays genuinely read-only:
+        # it writes nothing to the repo and nothing to the star lists.
+        if: ${{ steps.curate.outputs.has_findings == 'true' && !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}

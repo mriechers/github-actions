@@ -123,12 +123,20 @@ class TestReport(unittest.TestCase):
         self.assertIn("Dry run", out)
 
     def test_ambiguous_entry_explains_why(self):
-        out = build_report([], [(repo(full_name="a/b"), [])], [], [], False)
+        out = build_report([], [(repo(full_name="a/b"), [], [])], [], [], False)
         self.assertIn("no rule matched", out)
 
     def test_multi_match_names_the_candidates(self):
-        out = build_report([], [(repo(full_name="a/b"), ["X", "Y"])], [], [], False)
+        out = build_report([], [(repo(full_name="a/b"), ["X", "Y"], ["X", "Y"])], [], [], False)
         self.assertIn("matches X, Y", out)
+
+    def test_match_on_a_missing_list_says_so_instead_of_no_match(self):
+        # First-time setup is exactly when a rule names a list that has not
+        # been created yet. Reporting that as "no rule matched" sends someone
+        # to debug their rules file when the rules are fine.
+        out = build_report([], [(repo(full_name="a/b"), ["HA Projects"], [])], [], [], False)
+        self.assertIn("no list of that name exists", out)
+        self.assertNotIn("no rule matched", out)
 
 
 class TestFetchListsPagination(unittest.TestCase):

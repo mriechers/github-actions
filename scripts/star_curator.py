@@ -236,8 +236,17 @@ def build_report(filed, ambiguous, rot, drift, dry_run: bool) -> str:
             "Starred but in no list. Rules matched nothing, or matched more than one.",
             "",
         ]
-        for r, matched in ambiguous:
-            why = f"matches {', '.join(matched)}" if matched else "no rule matched"
+        for r, matched, present in ambiguous:
+            if not matched:
+                why = "no rule matched"
+            elif not present:
+                # The rule fired, but names a list that does not exist yet.
+                # Reporting this as "no rule matched" sends someone to debug
+                # their rules file when the actual fix is to create the list —
+                # and first-time setup is exactly when this happens.
+                why = f"matched {', '.join(matched)}, but no list of that name exists"
+            else:
+                why = f"matches {', '.join(present)}"
             desc = r["description"][:90] or "—"
             lines.append(f"- `{r['full_name']}` — _{why}_  \n  {desc}")
         lines.append("")
@@ -291,19 +300,24 @@ def main() -> int:
     filed_names = {n for spec in lists.values() for n in spec["items"]}
 
     filed: list[tuple[str, str]] = []
-    ambiguous: list[tuple[dict, list[str]]] = []
+    ambiguous: list[tuple[dict, list[str], list[str]]] = []
 
     for repo in stars:
         if repo["full_name"] in filed_names:
             continue
-        matches = [m for m in route(repo, rules) if m in lists]
-        if len(matches) == 1:
-            target = matches[0]
+        # Both sets are carried into the report: what the rules matched, and
+        # which of those lists actually exist. Collapsing them loses the
+        # difference between "your rules say nothing about this" and "your
+        # rules are right but the list isn't created yet".
+        matched = route(repo, rules)
+        present = [m for m in matched if m in lists]
+        if len(present) == 1:
+            target = present[0]
             if not args.dry_run:
                 file_repo(token, repo["node_id"], lists[target]["id"])
             filed.append((repo["full_name"], target))
         else:
-            ambiguous.append((repo, matches))
+            ambiguous.append((repo, matched, present))
 
     rot = rot_signals(stars, rules, lists)
 

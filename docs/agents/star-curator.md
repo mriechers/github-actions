@@ -93,11 +93,25 @@ call the engine defers.
 4. **Run with `dry-run: true` first.** The rules will be wrong on the first
    pass; a dry run shows what would have been filed without doing it.
 
+A dry run is read-only in every direction: it files nothing, and it also opens
+and closes no issues. The full report goes to the job summary instead, so a
+preview can never close the live report issue and discard the discussion on it.
+
+The report label is created on first use if it does not exist — `gh issue
+create --label` errors on a missing label rather than creating one, which would
+otherwise fail a new consumer's first real run *after* the curation work was
+already done.
+
 ## Ordering note
 
 The engine files into lists that already exist and skips rules naming a list it
 cannot find. A first-time setup means creating the lists and doing the bulk
 filing once by hand; the weekly run is a maintenance loop, not a bootstrapper.
+
+When a rule matches but names a list that does not exist yet, the report says
+so specifically — `matched X, but no list of that name exists` — rather than
+`no rule matched`. The two have completely different fixes, and conflating them
+sends you to edit a rules file that was right all along.
 
 ## When the undocumented API breaks
 
