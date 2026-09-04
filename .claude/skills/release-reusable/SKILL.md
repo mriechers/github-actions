@@ -1,6 +1,6 @@
 ---
 name: release-reusable
-description: Walk the cross-repo release of a change to this repo's reusable workflows — commit here, optionally move the v1 tag, re-pin the fleet stubs in the-lodge, preview the sweep, and hand the fleet write off to Mark.
+description: Walk the release of a change to this repo's reusable workflows — commit, optionally move the v1 tag, re-pin the three fleet stubs, preview the sweep, and hand the fleet write off to Mark.
 disable-model-invocation: true
 ---
 
@@ -39,35 +39,38 @@ git tag -f v1 && git push -f origin v1
 
 ## 3. Re-pin the fleet stubs
 
-Both stubs live in a **different repo**:
-`~/Developer/the-lodge/scripts/claude-workflow-migration/stubs/`
+All three stubs live **in this repo** at `scripts/fleet-sweep/stubs/` (moved from
+the-lodge 2026-09-02):
 
 - `claude-code-review.yml` → pins `.github/workflows/claude-review.yml@<SHA>  # v1`
-  (this stub was retired 2026-07-31 and restored by the-lodge's rail-flip PR
-  alongside the PR-review unification; `sweep.sh` writes both stubs again)
 - `claude.yml` → pins `.github/workflows/claude-interactive.yml@<SHA>  # v1`
+- `floor.yml` → pins `.github/workflows/floor.yml@<SHA>  # v1`
 
-Replace the old SHA with the new one in both, keeping the `# v1` comment. Then verify
-they are still **byte-identical** to the-lodge's own live workflows:
+Replace the SHA in all three, keeping the `# v1` comment. **They must agree** —
+`sweep.sh` refuses a run where they disagree. That check did not exist before; the
+interactive stub drifted 21 commits behind and `@claude` reviewed the default branch
+instead of the PR head for three weeks (#37).
+
+Also bump this repo's own caller, `.github/workflows/claude-code-review.yml`, so the
+host is not a counter-example to what it ships.
+
+The preflight is the verification step — run it and read it:
 
 ```bash
-diff ~/Developer/the-lodge/scripts/claude-workflow-migration/stubs/claude-code-review.yml \
-     ~/Developer/the-lodge/.github/workflows/claude-code-review.yml
-diff ~/Developer/the-lodge/scripts/claude-workflow-migration/stubs/claude.yml \
-     ~/Developer/the-lodge/.github/workflows/claude.yml
+DRY=1 ./scripts/fleet-sweep/sweep.sh
 ```
 
-If they differ, update the-lodge's own workflows to match before continuing — a drifted
-stub means the-lodge stops being a faithful sample of what the fleet gets.
-
-Commit the stub bump in the-lodge (that repo's own commit conventions apply).
+It aborts unless the stubs agree, the SHA is reachable from `main`, each stub calls a
+reusable that exists at it, and the pin carries every change made to a reusable. That
+last check is narrower than "pin equals main's tip" on purpose: docs and tooling
+commits move `main` without invalidating a pin.
 
 ## 4. Preview, then hand off the sweep
 
 Preview is safe and writes nothing — run it yourself:
 
 ```bash
-cd ~/Developer/the-lodge && DRY=1 ./scripts/claude-workflow-migration/sweep.sh
+DRY=1 ./scripts/fleet-sweep/sweep.sh
 ```
 
 Read the preview and report: which repos will be updated, which skip (already on the
@@ -77,7 +80,7 @@ target SHA), and anything unexpected.
 blocks agent fleet writes. Ask Mark to run it via `!`:
 
 ```
-! cd ~/Developer/the-lodge && ./scripts/claude-workflow-migration/sweep.sh
+! cd ~/Developer/github-actions && ./scripts/fleet-sweep/sweep.sh
 ```
 
 Do not run it, wrap it, or work around the classifier.
@@ -88,7 +91,7 @@ After Mark's sweep completes, re-run the audit to confirm every in-scope repo po
 the new SHA:
 
 ```bash
-cd ~/Developer/the-lodge && ./scripts/audit-claude-automations.sh
+./scripts/fleet-sweep/status.sh
 ```
 
 Summarize: released SHA, repos re-pinned, repos skipped, anything still stale.

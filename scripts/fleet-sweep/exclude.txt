@@ -1,0 +1,9 @@
+# Repos the sweep must skip. One glob per line, matched against owner/repo.
+# Blank lines and # comments ignored. Prefer patterns over names.
+#
+# THE HOST REPO IS NOT OPTIONAL. The stubs are named claude.yml,
+# claude-code-review.yml and floor.yml; this repo's own floor.yml IS the
+# reusable, not a caller. Sweeping the host would overwrite the reusable with a
+# stub that calls itself. sweep.sh refuses this independently of this file --
+# removing the line does not enable it.
+mriechers/github-actions

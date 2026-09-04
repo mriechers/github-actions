@@ -1,0 +1,11 @@
+# Owners the sweep enumerates. One per line; blank lines and # comments ignored.
+#
+# Adding an owner here is what puts its repos in scope — that is the point.
+# Enrollment used to be a hand-maintained list of repos, which failed OPEN:
+# a repo absent from the list was silently unenrolled, and 38 of them were.
+# Listing owners instead of repos makes a new repo enrolled by default.
+mriechers
+Wonder-Cabinet-Productions
+public-media-work
+mark-support
+wpr-ttbook
