@@ -19,7 +19,6 @@ name: Floor (reusable)
 #     floor:
 #       permissions:
 #         contents: read
-#         pull-requests: write   # gitleaks comments findings on PRs
 #       uses: mriechers/github-actions/.github/workflows/floor.yml@<sha>
 #
 # The permissions block must live in the caller — a reusable can only downgrade
@@ -59,8 +58,37 @@ jobs:
           # caller's job a credential this workflow has no reason to grant.
           persist-credentials: false
 
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+      # The gitleaks CLI, not gitleaks/gitleaks-action. The Action is free only
+      # for personal accounts — on an ORGANISATION repo it exits non-zero with
+      # "is an organization. License key is required." That made the floor a
+      # permanent red X on all 28 org repos in the fleet while passing on the
+      # 54 personal ones. The scanner itself is MIT and has no such gate, so we
+      # install the release binary and skip the wrapper.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: ${{ inputs.gitleaks-config }}
+          VERSION: '8.30.1'
+          SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          set -euo pipefail
+          tgz="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -sSfL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/${tgz}" \
+            -o "$RUNNER_TEMP/$tgz"
+          echo "${SHA256}  $RUNNER_TEMP/$tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP" gitleaks
+          install "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
+          gitleaks version
+
+      # Exits 1 when it finds anything, which is what fails the job. --redact
+      # keeps the secret itself out of the log: a finding must not publish the
+      # thing it is reporting.
+      - name: Run gitleaks
+        env:
+          CONFIG: ${{ inputs.gitleaks-config }}
+        run: |
+          set -euo pipefail
+          args=(git . --redact --verbose --exit-code 1)
+          if [ -n "$CONFIG" ]; then
+            args+=(--config "$CONFIG")
+          fi
+          gitleaks "${args[@]}"
