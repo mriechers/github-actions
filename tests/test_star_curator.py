@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -342,6 +343,78 @@ class TestLoadRules(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             star_curator.load_rules("/nonexistent/star-rules.yml")
         self.assertIn("not found", str(cm.exception))
+
+
+class TestMainFilingLoop(unittest.TestCase):
+    """Exercises main() itself. The in-memory bookkeeping bugs live here, not
+    in the pure helpers, so testing build_report with hand-built args misses
+    them entirely."""
+
+    def _run(self, stars, lists, rules, file_side_effect=None, extra_args=()):
+        import tempfile
+
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        json.dump(rules, fh)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+
+        captured = {}
+
+        def fake_report(filed, ambiguous, rot, drift, dry_run, *rest):
+            captured.update(
+                filed=filed, ambiguous=ambiguous, rot=rot, drift=drift,
+                dry_run=dry_run, rest=rest, lists=lists,
+            )
+            return "report"
+
+        with mock.patch.dict(os.environ, {"STARS_TOKEN": "tok"}, clear=False), \
+             mock.patch.object(star_curator, "assert_list_api"), \
+             mock.patch.object(star_curator, "fetch_stars", return_value=stars), \
+             mock.patch.object(star_curator, "fetch_lists", return_value=lists), \
+             mock.patch.object(star_curator, "file_repo", side_effect=file_side_effect), \
+             mock.patch.object(star_curator, "build_report", side_effect=fake_report), \
+             mock.patch.object(
+                 sys, "argv", ["star_curator", "--rules", fh.name, *extra_args]
+             ):
+            code = star_curator.main()
+        return code, captured
+
+    RULES = {"oversize": 2, "lists": {"HA": {"topics": ["hacs"]}}}
+
+    def _lists(self):
+        return {"HA": {"id": "L1", "items": {"seed/one", "seed/two"}}}
+
+    def test_a_successful_write_updates_the_in_memory_view(self):
+        stars = [repo(full_name="a/b", topics=["hacs"])]
+        lists = self._lists()
+        _, cap = self._run(stars, lists, self.RULES)
+        self.assertIn("a/b", lists["HA"]["items"])
+        # Three members now, over the oversize of 2 — reported in the same run.
+        self.assertTrue(any("HA" in d for d in cap["drift"]))
+
+    def test_a_failed_write_does_not_invent_membership(self):
+        # The blocker. Two repos match; the first write fails, so NEITHER may
+        # be recorded as a member — the second was never even attempted.
+        stars = [
+            repo(full_name="a/b", topics=["hacs"]),
+            repo(full_name="c/d", topics=["hacs"]),
+        ]
+        lists = self._lists()
+        boom = star_curator.ApiError("HTTP 502")
+        code, cap = self._run(stars, lists, self.RULES, file_side_effect=boom)
+        self.assertNotIn("a/b", lists["HA"]["items"])
+        self.assertNotIn("c/d", lists["HA"]["items"])
+        self.assertEqual(lists["HA"]["items"], {"seed/one", "seed/two"})
+        self.assertEqual(code, 1)
+        # Both still reported, so the run says what it intended to do.
+        self.assertEqual([n for n, _ in cap["filed"]], ["a/b", "c/d"])
+
+    def test_a_dry_run_invents_no_membership_either(self):
+        stars = [repo(full_name="a/b", topics=["hacs"])]
+        lists = self._lists()
+        _, cap = self._run(stars, lists, self.RULES, extra_args=["--dry-run"])
+        self.assertNotIn("a/b", lists["HA"]["items"])
+        self.assertEqual(cap["drift"], [])
 
 
 class TestSafetyContract(unittest.TestCase):

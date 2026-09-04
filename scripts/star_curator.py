@@ -70,6 +70,11 @@ def _request(url: str, token: str, method: str = "GET", body: dict | None = None
             return json.loads(payload) if payload else None
     except urllib.error.HTTPError as exc:  # pragma: no cover - network path
         raise ApiError(f"{method} {url} -> HTTP {exc.code}: {exc.read()[:400]!r}") from exc
+    except urllib.error.URLError as exc:  # pragma: no cover - network path
+        # HTTPError is a subclass, so this only sees transport failures —
+        # DNS, TLS, timeouts. Without it a network blip is the one path that
+        # escapes as a raw traceback.
+        raise ApiError(f"{method} {url} -> {exc.reason}") from exc
 
 
 def graphql(token: str, query: str, variables: dict | None = None) -> dict:
@@ -291,7 +296,13 @@ def build_report(
         did_file = not dry_run and not list_api_error and not filing_error
         heading = "Filed automatically" if did_file else "Would file"
         lines += [f"### {heading} ({len(filed)})", ""]
-        lines += [f"- `{n}` → **{lst}**" for n, lst in filed] + [""]
+        for i, (n, lst) in enumerate(filed):
+            # Filing stops at the first failure and order is preserved, so
+            # everything past `written` was matched but never attempted. Say
+            # which is which rather than making someone infer it from a count.
+            note = "  _(not written)_" if filing_error and i >= written else ""
+            lines.append(f"- `{n}` → **{lst}**{note}")
+        lines.append("")
 
     if ambiguous:
         lines += [
@@ -431,6 +442,13 @@ def main() -> int:
                 try:
                     file_repo(token, repo["node_id"], lists[target]["id"])
                     written += 1
+                    # Only a write that actually landed updates the in-memory
+                    # view, which feeds the drift counts and the `keep_lists`
+                    # rot exemption below. Adding unconditionally invented
+                    # membership for repos nothing was even attempted for —
+                    # inflating a list past `oversize`, or silencing a rot
+                    # signal for a repo that is not in the exempt list at all.
+                    lists[target]["items"].add(repo["full_name"])
                 except ApiError as exc:
                     # Some repos are already filed at this point — those writes
                     # are committed and cannot be rolled back. Stop writing,
@@ -440,11 +458,6 @@ def main() -> int:
                     filing_error = str(exc)
                     print(f"star-curator: filing stopped: {exc}", file=sys.stderr)
                     may_file = False
-            # Keep the in-memory view in step, so the drift check below counts
-            # this run's own filings. Otherwise a list crossing the oversize
-            # threshold because of what just happened is not reported until the
-            # next scheduled run, a week later.
-            lists[target]["items"].add(repo["full_name"])
             filed.append((repo["full_name"], target))
         else:
             ambiguous.append((repo, matched, present))
