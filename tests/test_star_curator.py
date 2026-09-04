@@ -153,6 +153,21 @@ class TestReport(unittest.TestCase):
         out = build_report([("a/b", "HA Projects")], [], [], [], True)
         self.assertIn("Dry run", out)
 
+    def test_dry_run_says_would_file_not_filed(self):
+        # The banner says nothing was filed; the section heading must agree.
+        out = build_report([("a/b", "HA Projects")], [], [], [], True)
+        self.assertIn("Would file", out)
+        self.assertNotIn("Filed automatically", out)
+
+    def test_degraded_run_says_would_file_too(self):
+        out = build_report([("a/b", "HA")], [], [], [], False, "api gone")
+        self.assertIn("Would file", out)
+        self.assertNotIn("Filed automatically", out)
+
+    def test_a_real_run_says_filed(self):
+        out = build_report([("a/b", "HA Projects")], [], [], [], False)
+        self.assertIn("Filed automatically", out)
+
     def test_ambiguous_entry_explains_why(self):
         out = build_report([], [(repo(full_name="a/b"), [], [])], [], [], False)
         self.assertIn("no rule matched", out)

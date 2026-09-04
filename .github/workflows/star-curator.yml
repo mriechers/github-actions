@@ -153,12 +153,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}
+          # A clean run supersedes nothing — it opens no replacement. Saying
+          # "superseded" there sends someone looking for a newer issue that
+          # was never created.
+          COMMENT: >-
+            ${{ steps.curate.outputs.has_findings == 'true'
+            && 'Superseded by a newer star curation run.'
+            || 'Closed by a star curation run with no findings — nothing outstanding.' }}
         run: |
           gh issue list --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
             --state open --json number --jq '.[].number' \
           | while read -r n; do
               [ -n "$n" ] && gh issue close "$n" --repo "$GITHUB_REPOSITORY" \
-                --comment "Superseded by a newer star curation run."
+                --comment "$COMMENT"
             done
 
       - name: Open the report

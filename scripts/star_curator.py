@@ -250,7 +250,13 @@ def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: st
         lines += ["> Dry run — nothing was filed.", ""]
 
     if filed:
-        lines += [f"### Filed automatically ({len(filed)})", ""]
+        # Past tense only when something actually happened. A dry run and a
+        # degraded run both leave the lists untouched, so "Filed automatically"
+        # there contradicts the banner three lines above it — and the dry run
+        # is what the docs tell a first-time user to trust.
+        did_file = not dry_run and not list_api_error
+        heading = "Filed automatically" if did_file else "Would file"
+        lines += [f"### {heading} ({len(filed)})", ""]
         lines += [f"- `{n}` → **{lst}**" for n, lst in filed] + [""]
 
     if ambiguous:
