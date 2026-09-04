@@ -15,7 +15,7 @@ shared workflow.
 | `.github/workflows/claude-interactive.yml` | Interactive `@claude` on issues/PRs | `model` (default `sonnet`), `claude_args` |
 | `.github/workflows/python-ci.yml` | Tier A Python CI — floor + ruff + pyright + pytest | `python-version` (default `3.11`), `test-paths`, `install-cmd`, `ruff-select`, `pyright-mode`, `run-tests` |
 | `.github/workflows/js-ci.yml` | Tier A JS/TS CI — floor + lint + typecheck + test | `node-version`, `install-cmd`, `lint-cmd`, `test-cmd` |
-| `.github/workflows/star-curator.yml` | Files starred repos into star Lists, reports the rest | `rules-path`, `dry-run`, `issue-label`; secret `stars-token` |
+| `.github/workflows/star-curator.yml` | Files starred repos into star Lists, reports the rest | `rules-path`, `dry-run`, `issue-label`, `engine-ref`; secret `stars-token` |
 
 ### Tier A language CI
 

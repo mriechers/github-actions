@@ -250,8 +250,27 @@ def file_repo(token: str, node_id: str, list_id: str) -> None:
     )
 
 
-def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: str = "") -> str:
+def build_report(
+    filed,
+    ambiguous,
+    rot,
+    drift,
+    dry_run: bool,
+    list_api_error: str = "",
+    filing_error: str = "",
+    written: int = 0,
+) -> str:
     lines = ["## Star curation report", ""]
+    if filing_error:
+        lines += [
+            f"> **Filing stopped after {written} of {len(filed)} repos.**",
+            f"> {filing_error}",
+            ">",
+            "> The writes that succeeded are committed — those repos are filed.",
+            "> The rest are listed below and were not written. Re-running is",
+            "> safe: an already-filed repo is skipped.",
+            "",
+        ]
     if list_api_error:
         lines += [
             "> **Filing is disabled — the List API check failed.**",
@@ -269,7 +288,7 @@ def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: st
         # degraded run both leave the lists untouched, so "Filed automatically"
         # there contradicts the banner three lines above it — and the dry run
         # is what the docs tell a first-time user to trust.
-        did_file = not dry_run and not list_api_error
+        did_file = not dry_run and not list_api_error and not filing_error
         heading = "Filed automatically" if did_file else "Would file"
         lines += [f"### {heading} ({len(filed)})", ""]
         lines += [f"- `{n}` → **{lst}**" for n, lst in filed] + [""]
@@ -394,6 +413,8 @@ def main() -> int:
 
     filed: list[tuple[str, str]] = []
     ambiguous: list[tuple[dict, list[str], list[str]]] = []
+    filing_error = ""
+    written = 0
 
     for repo in stars:
         if repo["full_name"] in filed_names:
@@ -407,7 +428,18 @@ def main() -> int:
         target = filing_target(matched, present)
         if target:
             if may_file:
-                file_repo(token, repo["node_id"], lists[target]["id"])
+                try:
+                    file_repo(token, repo["node_id"], lists[target]["id"])
+                    written += 1
+                except ApiError as exc:
+                    # Some repos are already filed at this point — those writes
+                    # are committed and cannot be rolled back. Stop writing,
+                    # but keep classifying so the report is still complete and
+                    # still says what happened. Dying here would leave real
+                    # writes with no record of them anywhere.
+                    filing_error = str(exc)
+                    print(f"star-curator: filing stopped: {exc}", file=sys.stderr)
+                    may_file = False
             # Keep the in-memory view in step, so the drift check below counts
             # this run's own filings. Otherwise a list crossing the oversize
             # threshold because of what just happened is not reported until the
@@ -428,7 +460,9 @@ def main() -> int:
         elif count > oversize:
             drift.append(f"**{name}** holds {count} repos (over {oversize})")
 
-    report = build_report(filed, ambiguous, rot, drift, args.dry_run, list_api_error)
+    report = build_report(
+        filed, ambiguous, rot, drift, args.dry_run, list_api_error, filing_error, written
+    )
     print(report)
 
     if args.report:
@@ -440,9 +474,9 @@ def main() -> int:
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"has_findings={'true' if has_findings else 'false'}\n")
             fh.write(f"filed_count={len(filed)}\n")
-    # Red check when the List API has moved, but only after the advisory
-    # report has been printed and written.
-    return 1 if list_api_error else 0
+    # Red check when the List API has moved or filing broke part-way, but only
+    # after the report has been printed and written.
+    return 1 if (list_api_error or filing_error) else 0
 
 
 if __name__ == "__main__":

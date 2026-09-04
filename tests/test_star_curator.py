@@ -203,6 +203,19 @@ class TestReport(unittest.TestCase):
         self.assertIn("does not exist", out)
 
 
+    def test_a_partial_filing_failure_still_reports_what_was_written(self):
+        # The writes that landed cannot be rolled back, so the run must not
+        # die silently holding that knowledge.
+        out = build_report(
+            [("a/b", "HA"), ("c/d", "HA")], [], [], [], False,
+            filing_error="HTTP 502", written=1,
+        )
+        self.assertIn("Filing stopped after 1 of 2", out)
+        self.assertIn("HTTP 502", out)
+        self.assertIn("Would file", out)
+        self.assertNotIn("Filed automatically", out)
+
+
 class TestFetchListsPagination(unittest.TestCase):
     """A member missed here looks unfiled, and filing it REPLACES its
     membership — so a read cap is data loss, not a missing row."""
