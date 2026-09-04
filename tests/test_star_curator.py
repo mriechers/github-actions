@@ -192,6 +192,17 @@ class TestReport(unittest.TestCase):
         self.assertNotIn("no rule matched", out)
 
 
+    def test_a_partly_missing_multi_match_names_both(self):
+        # Two rules matched, one list exists. Naming only the survivor reads
+        # as a single unambiguous match and leaves the reader asking why it
+        # was not filed — the second rule is the whole answer.
+        out = build_report([], [(repo(full_name="a/b"), ["Glitch", "Awesome"], ["Glitch"])],
+                           [], [], False)
+        self.assertIn("Glitch", out)
+        self.assertIn("Awesome", out)
+        self.assertIn("does not exist", out)
+
+
 class TestFetchListsPagination(unittest.TestCase):
     """A member missed here looks unfiled, and filing it REPLACES its
     membership — so a read cap is data loss, not a missing row."""

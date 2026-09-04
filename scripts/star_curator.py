@@ -282,6 +282,7 @@ def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: st
             "",
         ]
         for r, matched, present in ambiguous:
+            missing = [m for m in matched if m not in present]
             if not matched:
                 why = "no rule matched"
             elif not present:
@@ -290,6 +291,15 @@ def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: st
                 # their rules file when the actual fix is to create the list —
                 # and first-time setup is exactly when this happens.
                 why = f"matched {', '.join(matched)}, but no list of that name exists"
+            elif missing:
+                # Two rules matched and only one list exists. Naming just the
+                # surviving one reads as a single unambiguous match and leaves
+                # the reader wondering why it was not filed — the second rule
+                # IS the reason.
+                why = (
+                    f"matches {', '.join(present)}, and also "
+                    f"{', '.join(missing)}, which does not exist"
+                )
             else:
                 why = f"matches {', '.join(present)}"
             desc = r["description"][:90] or "—"
