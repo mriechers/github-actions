@@ -1,0 +1,243 @@
+name: Star curator (reusable)
+
+# Reconciles the calling user's starred repositories against their star Lists:
+# files the unambiguous ones, and opens one issue reporting everything that
+# needs a human decision.
+#
+# Why the engine is here and the taxonomy is not: someone's list taxonomy and
+# their keep-list are personal, and this repo is public. The caller supplies a
+# rules file from its own checkout, so nothing about a particular collection is
+# published here. See docs/agents/star-curator.md for the rules format.
+#
+# Why a PAT and not GITHUB_TOKEN: star Lists belong to a *user*, and the
+# built-in Actions token is a repo-scoped installation token with no user
+# identity — it cannot read or write them at any permission level. The caller
+# forwards its own PAT (scopes: `user`, plus `repo` for private-repo stars),
+# exactly as callers forward CLAUDE_CODE_OAUTH_TOKEN elsewhere in this repo.
+#
+# Consumers add .github/workflows/star-curator.yml:
+#
+#   name: Star curator
+#   on:
+#     schedule:
+#       - cron: '0 13 * * 1'   # Mondays, 13:00 UTC
+#     workflow_dispatch:
+#       inputs:
+#         dry-run:
+#           type: boolean
+#           default: true
+#   jobs:
+#     curate:
+#       permissions:
+#         contents: read
+#         issues: write        # the report lands as an issue on the caller
+#       uses: mriechers/github-actions/.github/workflows/star-curator.yml@<sha>
+#       with:
+#         dry-run: ${{ inputs.dry-run || false }}
+#       secrets:
+#         stars-token: ${{ secrets.STARS_TOKEN }}
+#
+# The permissions block must live in the caller — a reusable can only downgrade
+# the token it is handed, never widen it.
+
+on:
+  workflow_call:
+    inputs:
+      rules-path:
+        description: >-
+          Path, in the calling repo, to the star rules file (YAML or JSON).
+        required: false
+        type: string
+        default: .github/star-rules.yml
+      dry-run:
+        description: >-
+          Report what would be filed without writing anything. The engine never
+          unstars or creates lists regardless; this also suppresses filing.
+        required: false
+        type: boolean
+        default: false
+      issue-label:
+        description: Label applied to the report issue, and used to find the prior one to close.
+        required: false
+        type: string
+        default: star-curation
+      engine-ref:
+        description: >-
+          Override the ref this workflow's engine is checked out from. Empty
+          uses github.job_workflow_sha, so a re-pin moves the workflow and its
+          engine together, atomically. A fallback for the case where
+          job_workflow_sha regresses.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      stars-token:
+        description: PAT with `user` scope (and `repo` to see private-repo stars).
+        required: true
+
+jobs:
+  curate:
+    name: Reconcile stars against lists
+    runs-on: ubuntu-latest
+    # Generous, because a large collection paginates a lot — but bounded, so a
+    # scheduled job with no retry cannot sit and burn a runner for six hours.
+    # Individual calls already cap at 60s inside the engine.
+    timeout-minutes: 20
+    # "One open report at a time" is this workflow's own promise, so it is
+    # guarded here rather than left to each caller to remember. Two overlapping
+    # runs — a manual dispatch landing on top of the cron — would each close the
+    # same prior issue and then each open a new one. Not cancel-in-progress:
+    # a half-finished run has already written to the lists, so it finishes.
+    concurrency:
+      group: star-curator-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout caller (for the rules file)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout curation engine
+        # Same SHA the consumer pinned this workflow to, so the engine and the
+        # workflow that drives it can never disagree about their contract.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: mriechers/github-actions
+          ref: ${{ inputs.engine-ref != '' && inputs.engine-ref || github.job_workflow_sha }}
+          path: .engine
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Curate
+        id: curate
+        env:
+          # The PAT reaches only this step. Nothing else in the job needs it,
+          # and it must never land in .git/config for later steps to inherit.
+          STARS_TOKEN: ${{ secrets.stars-token }}
+          # Every caller-supplied value crosses into the shell as an environment
+          # variable, never as a `${{ }}` splice into the script body. These are
+          # workflow_call inputs rather than event payload, so the trust boundary
+          # is softer than the classic injection case — but a reusable workflow
+          # is precisely where an unsafe habit would get copied.
+          RULES_PATH: ${{ inputs.rules-path }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          args=(--rules "$RULES_PATH" --report "$RUNNER_TEMP/star-report.md")
+          # `if` rather than `[ ... ] && args+=(...)`. The bare && form works
+          # here — bash's errexit exempts a failing command that is not the
+          # last in an AND-OR list — but it silently becomes a step-killer the
+          # day someone moves it to the end of this block. Not worth leaving
+          # armed for a one-word saving.
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .engine/scripts/star_curator.py "${args[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure the report label exists
+        # `gh issue create --label` does NOT create a missing label, it errors.
+        # Without this a brand-new consumer following the documented setup has
+        # their first findings run die after the curation work is already done.
+        #
+        # `!cancelled()` rather than a bare `if:`. A bare condition is ANDed
+        # with success(), and the Curate step exits 1 on degraded mode and on a
+        # partial filing failure — the two cases where a report matters MOST.
+        # Without this the report reached the job summary and nothing else, so
+        # a weekly scheduled run failed silently. Gating on has_findings being
+        # `true` also means a hard crash, which never writes that output, opens
+        # nothing.
+        if: ${{ !cancelled() && !inputs.dry-run && steps.curate.outputs.has_findings == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          # Ask whether it exists rather than creating and forgiving the
+          # failure. `|| true` would also swallow a permissions error, and
+          # matching gh's "already exists" wording would turn an upstream
+          # phrasing change into a hard failure on an idempotent no-op. This
+          # way every error that reaches the create is a real one.
+          #
+          # Listing and matching exactly, rather than `--search`, which is a
+          # substring query — the same approach pr_label.ensure() takes.
+          if gh label list --repo "$GITHUB_REPOSITORY" --limit 200 \
+               --json name --jq '.[].name' | grep -qxF "$LABEL"; then
+            echo "Label '$LABEL' already exists."
+          else
+            gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" \
+              --color BFD4F2 --description "Star curation report"
+          fi
+
+      - name: Close the previous report
+        id: close_previous
+        # One open report at a time: a clean run leaves nothing behind, so an
+        # open issue always means there is something outstanding right now.
+        #
+        # Skipped on a dry run. A preview is documented as the first thing to
+        # try, and it has no business closing the live outstanding report and
+        # throwing away whatever discussion is on it.
+        #
+        # Requires has_findings to be SET, not true: an empty value means the
+        # engine crashed before reaching a verdict, and closing the outstanding
+        # report on the strength of a run that never finished would discard the
+        # only record of what is outstanding.
+        if: ${{ !cancelled() && !inputs.dry-run && steps.curate.outputs.has_findings != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+          # A clean run supersedes nothing — it opens no replacement. Saying
+          # "superseded" there sends someone looking for a newer issue that
+          # was never created.
+          COMMENT: >-
+            ${{ steps.curate.outputs.has_findings == 'true'
+            && 'Superseded by a newer star curation run.'
+            || 'Closed by a star curation run with no findings — nothing outstanding.' }}
+        run: |
+          # Read the numbers into a file first. Piping into `while` puts the
+          # loop in a subshell, so a failed close both aborts the loop under
+          # errexit and loses any state it recorded — the remaining issues
+          # stay open and nothing says so.
+          gh issue list --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
+            --state open --json number --jq '.[].number' > "$RUNNER_TEMP/open.txt"
+
+          failed=0
+          while read -r n; do
+            [ -n "$n" ] || continue
+            if ! gh issue close "$n" --repo "$GITHUB_REPOSITORY" \
+                   --comment "$COMMENT"; then
+              echo "Failed to close issue #$n" >&2
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/open.txt"
+
+          # Every issue is attempted before the step fails, so one bad close
+          # cannot silently strand the rest.
+          exit "$failed"
+
+      - name: Open the report
+        # Also skipped on a dry run — otherwise previews pile up issues that
+        # nothing closes, now that closing is gated too. The full report is
+        # already in the job summary, so a dry run stays genuinely read-only:
+        # it writes nothing to the repo and nothing to the star lists.
+        #
+        # Also requires the close step to have succeeded. Opening a second
+        # report while an older one is still open is the exact state the
+        # "one open report at a time" invariant exists to prevent, and a
+        # failed close is precisely when that would happen.
+        if: >-
+          ${{ !cancelled() && !inputs.dry-run
+          && steps.curate.outputs.has_findings == 'true'
+          && steps.close_previous.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Star curation: $(date -u +%Y-%m-%d)" \
+            --label "$LABEL" \
+            --body-file "$RUNNER_TEMP/star-report.md"
+
+      # The report body is built from repo descriptions written by third
+      # parties. It is only ever passed through --body-file, never spliced into
+      # a shell command, so a repo described as `$(...)` stays inert text.
+
