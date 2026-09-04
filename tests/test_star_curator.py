@@ -213,8 +213,22 @@ class TestReport(unittest.TestCase):
         )
         self.assertIn("Filing stopped after 1 of 2", out)
         self.assertIn("HTTP 502", out)
-        self.assertIn("Would file", out)
-        self.assertNotIn("Filed automatically", out)
+
+
+    def test_a_partial_failure_keeps_past_tense_for_the_writes_that_landed(self):
+        # The banner says the successful writes are committed. The heading
+        # must not then call the whole batch "Would file".
+        out = build_report(
+            [("a/b", "HA"), ("c/d", "HA")], [], [], [], False,
+            filing_error="HTTP 502", written=1,
+        )
+        self.assertIn("Filed automatically", out)
+        self.assertIn("_(not written)_", out)
+
+    def test_an_api_failure_is_never_nothing_to_report(self):
+        # The quietest possible output for the loudest possible problem.
+        out = build_report([], [], [], [], False, list_api_error="schema gone")
+        self.assertNotIn("Nothing to report", out)
 
 
 class TestFetchListsPagination(unittest.TestCase):
@@ -408,6 +422,24 @@ class TestMainFilingLoop(unittest.TestCase):
         self.assertEqual(code, 1)
         # Both still reported, so the run says what it intended to do.
         self.assertEqual([n for n, _ in cap["filed"]], ["a/b", "c/d"])
+
+    def test_a_filing_failure_marks_the_run_as_having_findings(self):
+        # has_findings gates the issue steps. A degraded or partly-failed run
+        # with no rot or drift must still open a report, or the loudest
+        # problem produces the quietest outcome.
+        stars = [repo(full_name="a/b", topics=["hacs"])]
+        lists = {"HA": {"id": "L1", "items": set()}}
+        out_file = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "__pycache__", "gh_out"
+        )
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        open(out_file, "w").close()
+        self.addCleanup(os.unlink, out_file)
+        boom = star_curator.ApiError("HTTP 502")
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": out_file}, clear=False):
+            code, _ = self._run(stars, lists, self.RULES, file_side_effect=boom)
+        self.assertEqual(code, 1)
+        self.assertIn("has_findings=true", open(out_file).read())
 
     def test_a_dry_run_invents_no_membership_either(self):
         stars = [repo(full_name="a/b", topics=["hacs"])]

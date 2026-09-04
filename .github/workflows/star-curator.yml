@@ -135,7 +135,15 @@ jobs:
         # `gh issue create --label` does NOT create a missing label, it errors.
         # Without this a brand-new consumer following the documented setup has
         # their first findings run die after the curation work is already done.
-        if: ${{ !inputs.dry-run }}
+        #
+        # `!cancelled()` rather than a bare `if:`. A bare condition is ANDed
+        # with success(), and the Curate step exits 1 on degraded mode and on a
+        # partial filing failure — the two cases where a report matters MOST.
+        # Without this the report reached the job summary and nothing else, so
+        # a weekly scheduled run failed silently. Gating on has_findings being
+        # `true` also means a hard crash, which never writes that output, opens
+        # nothing.
+        if: ${{ !cancelled() && !inputs.dry-run && steps.curate.outputs.has_findings == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}
@@ -163,7 +171,12 @@ jobs:
         # Skipped on a dry run. A preview is documented as the first thing to
         # try, and it has no business closing the live outstanding report and
         # throwing away whatever discussion is on it.
-        if: ${{ !inputs.dry-run }}
+        #
+        # Requires has_findings to be SET, not true: an empty value means the
+        # engine crashed before reaching a verdict, and closing the outstanding
+        # report on the strength of a run that never finished would discard the
+        # only record of what is outstanding.
+        if: ${{ !cancelled() && !inputs.dry-run && steps.curate.outputs.has_findings != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}
@@ -187,7 +200,7 @@ jobs:
         # nothing closes, now that closing is gated too. The full report is
         # already in the job summary, so a dry run stays genuinely read-only:
         # it writes nothing to the repo and nothing to the star lists.
-        if: ${{ steps.curate.outputs.has_findings == 'true' && !inputs.dry-run }}
+        if: ${{ !cancelled() && !inputs.dry-run && steps.curate.outputs.has_findings == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}

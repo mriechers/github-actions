@@ -127,6 +127,17 @@ for three months.
 When it fires the run does **not** abort. Filing switches off, the read path
 runs to completion, and the report is produced with a banner saying filing is
 disabled and why — so the ambiguity, rot and drift findings keep their value
-while the engine is being fixed. The job still exits non-zero afterwards, so
-the check goes red. The report reaches the job summary rather than an issue,
-because the failing step stops the issue steps from running.
+while the engine is being fixed. The job exits non-zero afterwards, so the
+check goes red.
+
+The report still opens as an issue. The issue steps are gated on
+`!cancelled()` rather than a bare `if:`, which Actions would silently AND with
+`success()` — that would have skipped reporting in exactly the two cases where
+a report matters most, leaving a weekly scheduled run to fail with nothing but
+a red dot nobody is watching. An API failure also counts as a finding in its
+own right, so a degraded run with no rot or drift still reports rather than
+saying "nothing to report".
+
+A crash before the engine reaches a verdict is different: it writes no
+`has_findings` output, so nothing is opened *and* nothing is closed. The
+outstanding report survives a run that never finished.

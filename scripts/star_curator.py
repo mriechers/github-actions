@@ -236,6 +236,9 @@ def rot_signals(
             continue
         if r["archived"]:
             out.append((r["full_name"], "archived upstream"))
+        # A missing pushed_at exempts the repo rather than flagging it. The
+        # date is absent, not old, and guessing either way would put a repo in
+        # a report on the strength of a field GitHub did not return.
         elif r["pushed_at"] and r["pushed_at"] < cutoff:
             out.append((r["full_name"], f"no push since {r['pushed_at']}"))
     return out
@@ -293,7 +296,11 @@ def build_report(
         # degraded run both leave the lists untouched, so "Filed automatically"
         # there contradicts the banner three lines above it — and the dry run
         # is what the docs tell a first-time user to trust.
-        did_file = not dry_run and not list_api_error and not filing_error
+        # A partial failure does not un-write the repos that succeeded before
+        # it. Calling the whole batch "Would file" contradicts this report's
+        # own banner, which says those writes are committed. The per-entry
+        # "(not written)" marks below carry the distinction.
+        did_file = not dry_run and not list_api_error and (not filing_error or written > 0)
         heading = "Filed automatically" if did_file else "Would file"
         lines += [f"### {heading} ({len(filed)})", ""]
         for i, (n, lst) in enumerate(filed):
@@ -348,7 +355,7 @@ def build_report(
     if drift:
         lines += [f"### List drift ({len(drift)})", ""] + [f"- {d}" for d in drift] + [""]
 
-    if not any([filed, ambiguous, rot, drift]):
+    if not any([filed, ambiguous, rot, drift, list_api_error, filing_error]):
         lines.append("Nothing to report — every star is filed and nothing has rotted.")
 
     return "\n".join(lines)
@@ -482,7 +489,10 @@ def main() -> int:
         with open(args.report, "w", encoding="utf-8") as fh:
             fh.write(report)
 
-    has_findings = bool(ambiguous or rot or drift)
+    # An API failure IS a finding. Without it a degraded run with nothing else
+    # to say reported "nothing to report" and opened no issue — the quietest
+    # possible outcome for the loudest possible problem.
+    has_findings = bool(ambiguous or rot or drift or list_api_error or filing_error)
     if out := os.environ.get("GITHUB_OUTPUT"):
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"has_findings={'true' if has_findings else 'false'}\n")
