@@ -264,6 +264,17 @@ def file_repo(token: str, node_id: str, list_id: str) -> None:
     )
 
 
+def _wrote(entry: tuple[str, str, bool]) -> bool:
+    """Did this filed entry actually reach the API?
+
+    A `filed` entry is (full_name, list_name, written). Carrying the flag on
+    the entry rather than deriving it from position lets build_report answer
+    the question from its own arguments — the alternative depended on an
+    ordering invariant enforced in a different function 150 lines away.
+    """
+    return entry[2]
+
+
 def build_report(
     filed,
     ambiguous,
@@ -272,12 +283,12 @@ def build_report(
     dry_run: bool,
     list_api_error: str = "",
     filing_error: str = "",
-    written: int = 0,
 ) -> str:
     lines = ["## Star curation report", ""]
     if filing_error:
         lines += [
-            f"> **Filing stopped after {written} of {len(filed)} repos.**",
+            f"> **Filing stopped after {sum(1 for e in filed if _wrote(e))} "
+            f"of {len(filed)} repos.**",
             f"> {filing_error}",
             ">",
             "> The writes that succeeded are committed — those repos are filed.",
@@ -303,17 +314,15 @@ def build_report(
         # there contradicts the banner three lines above it — and the dry run
         # is what the docs tell a first-time user to trust.
         # A partial failure does not un-write the repos that succeeded before
-        # it. Calling the whole batch "Would file" contradicts this report's
-        # own banner, which says those writes are committed. The per-entry
-        # "(not written)" marks below carry the distinction.
-        did_file = not dry_run and not list_api_error and (not filing_error or written > 0)
-        heading = "Filed automatically" if did_file else "Would file"
+        # it, so past tense is right whenever anything landed.
+        heading = "Filed automatically" if any(_wrote(e) for e in filed) else "Would file"
         lines += [f"### {heading} ({len(filed)})", ""]
-        for i, (n, lst) in enumerate(filed):
-            # Filing stops at the first failure and order is preserved, so
-            # everything past `written` was matched but never attempted. Say
-            # which is which rather than making someone infer it from a count.
-            note = "  _(not written)_" if filing_error and i >= written else ""
+        for entry in filed:
+            n, lst = entry[0], entry[1]
+            # Each entry carries whether it was actually written. Inferring it
+            # from position relative to a count meant this function depended on
+            # an ordering invariant enforced 150 lines away in main().
+            note = "" if _wrote(entry) else "  _(not written)_"
             lines.append(f"- `{n}` → **{lst}**{note}")
         lines.append("")
 
@@ -419,15 +428,15 @@ def load_rules(path: str) -> dict:
             values = spec.get(matcher)
             if values is None:
                 continue
-            if isinstance(values, str) or not isinstance(values, (list, tuple)):
-                raise SystemExit(
+            if not isinstance(values, (list, tuple)) or isinstance(values, str):
+                message = (
                     f"star-curator: `{matcher}` for `{name}` in {path} must be "
-                    f"a list, got {type(values).__name__}. Write "
-                    f"`{matcher}: [{values!r}]`, not `{matcher}: {values!r}`."
-                    if isinstance(values, str)
-                    else f"star-curator: `{matcher}` for `{name}` in {path} "
-                    f"must be a list, got {type(values).__name__}."
+                    f"a list, got {type(values).__name__}."
                 )
+                if isinstance(values, str):
+                    # By far the likeliest mistake, so name the exact fix.
+                    message += f" Write `{matcher}: [{values!r}]`."
+                raise SystemExit(message)
             bad = [v for v in values if not isinstance(v, str)]
             if bad:
                 raise SystemExit(
@@ -482,10 +491,9 @@ def main() -> int:
     lists = fetch_lists(token)
     filed_names = {n for spec in lists.values() for n in spec["items"]}
 
-    filed: list[tuple[str, str]] = []
+    filed: list[tuple[str, str, bool]] = []
     ambiguous: list[tuple[dict, list[str], list[str]]] = []
     filing_error = ""
-    written = 0
 
     for repo in stars:
         if repo["full_name"] in filed_names:
@@ -498,10 +506,11 @@ def main() -> int:
         present = [m for m in matched if m in lists]
         target = filing_target(matched, present)
         if target:
+            wrote = False
             if may_file:
                 try:
                     file_repo(token, repo["node_id"], lists[target]["id"])
-                    written += 1
+                    wrote = True
                     # Only a write that actually landed updates the in-memory
                     # view, which feeds the drift counts and the `keep_lists`
                     # rot exemption below. Adding unconditionally invented
@@ -518,7 +527,7 @@ def main() -> int:
                     filing_error = str(exc)
                     print(f"star-curator: filing stopped: {exc}", file=sys.stderr)
                     may_file = False
-            filed.append((repo["full_name"], target))
+            filed.append((repo["full_name"], target, wrote))
         else:
             ambiguous.append((repo, matched, present))
 
@@ -534,7 +543,7 @@ def main() -> int:
             drift.append(f"**{name}** holds {count} repos (over {oversize})")
 
     report = build_report(
-        filed, ambiguous, rot, drift, args.dry_run, list_api_error, filing_error, written
+        filed, ambiguous, rot, drift, args.dry_run, list_api_error, filing_error
     )
     print(report)
 

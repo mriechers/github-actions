@@ -158,22 +158,22 @@ class TestReport(unittest.TestCase):
         self.assertIn("Nothing to report", build_report([], [], [], [], False))
 
     def test_dry_run_is_announced(self):
-        out = build_report([("a/b", "HA Projects")], [], [], [], True)
+        out = build_report([("a/b", "HA Projects", False)], [], [], [], True)
         self.assertIn("Dry run", out)
 
     def test_dry_run_says_would_file_not_filed(self):
         # The banner says nothing was filed; the section heading must agree.
-        out = build_report([("a/b", "HA Projects")], [], [], [], True)
+        out = build_report([("a/b", "HA Projects", False)], [], [], [], True)
         self.assertIn("Would file", out)
         self.assertNotIn("Filed automatically", out)
 
     def test_degraded_run_says_would_file_too(self):
-        out = build_report([("a/b", "HA")], [], [], [], False, "api gone")
+        out = build_report([("a/b", "HA", False)], [], [], [], False, "api gone")
         self.assertIn("Would file", out)
         self.assertNotIn("Filed automatically", out)
 
     def test_a_real_run_says_filed(self):
-        out = build_report([("a/b", "HA Projects")], [], [], [], False)
+        out = build_report([("a/b", "HA Projects", True)], [], [], [], False)
         self.assertIn("Filed automatically", out)
 
     def test_ambiguous_entry_explains_why(self):
@@ -208,8 +208,8 @@ class TestReport(unittest.TestCase):
         # The writes that landed cannot be rolled back, so the run must not
         # die silently holding that knowledge.
         out = build_report(
-            [("a/b", "HA"), ("c/d", "HA")], [], [], [], False,
-            filing_error="HTTP 502", written=1,
+            [("a/b", "HA", True), ("c/d", "HA", False)], [], [], [], False,
+            filing_error="HTTP 502",
         )
         self.assertIn("Filing stopped after 1 of 2", out)
         self.assertIn("HTTP 502", out)
@@ -219,8 +219,8 @@ class TestReport(unittest.TestCase):
         # The banner says the successful writes are committed. The heading
         # must not then call the whole batch "Would file".
         out = build_report(
-            [("a/b", "HA"), ("c/d", "HA")], [], [], [], False,
-            filing_error="HTTP 502", written=1,
+            [("a/b", "HA", True), ("c/d", "HA", False)], [], [], [], False,
+            filing_error="HTTP 502",
         )
         self.assertIn("Filed automatically", out)
         self.assertIn("_(not written)_", out)
@@ -459,7 +459,9 @@ class TestMainFilingLoop(unittest.TestCase):
         self.assertEqual(lists["HA"]["items"], {"seed/one", "seed/two"})
         self.assertEqual(code, 1)
         # Both still reported, so the run says what it intended to do.
-        self.assertEqual([n for n, _ in cap["filed"]], ["a/b", "c/d"])
+        self.assertEqual([n for n, _, _ in cap["filed"]], ["a/b", "c/d"])
+        # Neither was written: the first failed, the second was never tried.
+        self.assertEqual([w for _, _, w in cap["filed"]], [False, False])
 
     def test_a_filing_failure_marks_the_run_as_having_findings(self):
         # has_findings gates the issue steps. A degraded or partly-failed run
