@@ -10,6 +10,7 @@ from star_curator import (  # noqa: E402
     REQUIRED_MUTATIONS,
     build_report,
     fetch_lists,
+    filing_target,
     rot_signals,
     route,
 )
@@ -56,7 +57,7 @@ class TestRoute(unittest.TestCase):
         self.assertEqual(route(r, RULES), ["Agent tooling"])
 
     def test_prefix_matches_repo_name_not_owner(self):
-        # The prefix is checked against the full name, so an owner called
+        # The prefix is checked against the bare repo name, so an owner called
         # "awesome-corp" must not sweep every repo they publish into the list.
         self.assertEqual(route(repo(full_name="awesome-corp/widget"), RULES), [])
 
@@ -74,6 +75,15 @@ class TestRoute(unittest.TestCase):
         r = repo(description="MODEL CONTEXT PROTOCOL server")
         self.assertEqual(route(r, RULES), ["Agent tooling"])
 
+    def test_keywords_never_match_against_the_owner(self):
+        # `prefixes` deliberately ignores the owner so `awesome-corp` cannot
+        # sweep its whole output into one list. Keywords must not reopen that
+        # door: an owner named `glitch-labs` publishing a database is still a
+        # database.
+        rules = {"lists": {"Glitch": {"keywords": ["glitch"]}}}
+        r = repo(full_name="glitch-labs/postgres-pool", description="a database pool")
+        self.assertEqual(route(r, rules), [])
+
     def test_keywords_match_as_substrings_not_words(self):
         # Pinning the semantics, because they are sharp. A short keyword hits
         # inside longer words: `art` files `startech` and `Chartbuilder` into a
@@ -83,6 +93,27 @@ class TestRoute(unittest.TestCase):
         # rules files regenerated — not an incidental refactor.
         rules = {"lists": {"Glitch": {"keywords": ["art"]}}}
         self.assertEqual(route(repo(full_name="o/startech-enclosure"), rules), ["Glitch"])
+
+
+class TestFilingTarget(unittest.TestCase):
+    def test_one_rule_one_existing_list_files(self):
+        self.assertEqual(filing_target(["HA"], ["HA"]), "HA")
+
+    def test_two_rules_never_file_even_when_only_one_list_exists(self):
+        # The blocker this function exists for. `present` alone is 1 here, so
+        # the old gate filed it — silently picking one of two matching rules,
+        # the single thing the engine promises never to do. Which lists have
+        # been created is not evidence about which rule was meant.
+        self.assertIsNone(filing_target(["Glitch", "Awesome"], ["Glitch"]))
+
+    def test_two_rules_two_lists_is_ambiguous(self):
+        self.assertIsNone(filing_target(["Glitch", "Awesome"], ["Glitch", "Awesome"]))
+
+    def test_one_rule_naming_a_missing_list_does_not_file(self):
+        self.assertIsNone(filing_target(["HA"], []))
+
+    def test_no_rules_do_not_file(self):
+        self.assertIsNone(filing_target([], []))
 
 
 class TestRotSignals(unittest.TestCase):
@@ -198,6 +229,40 @@ class TestFetchListsPagination(unittest.TestCase):
         with mock.patch.object(star_curator, "graphql", side_effect=[page]) as g:
             fetch_lists("tok")
         self.assertEqual(g.call_count, 1)
+
+
+class TestDegradedMode(unittest.TestCase):
+    def test_report_announces_that_filing_is_off(self):
+        out = build_report([], [], [], [], False, "mutation is gone")
+        self.assertIn("Filing is disabled", out)
+        self.assertIn("mutation is gone", out)
+
+    def test_report_still_renders_its_findings_alongside_the_warning(self):
+        # The whole point of the degraded mode: the read path keeps its value.
+        out = build_report([], [], [("a/b", "archived upstream")], [], False, "gone")
+        self.assertIn("Filing is disabled", out)
+        self.assertIn("a/b", out)
+
+
+class TestLoadRules(unittest.TestCase):
+    def _write(self, text, suffix=".json"):
+        import tempfile
+
+        fh = tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8")
+        fh.write(text)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        return fh.name
+
+    def test_a_non_mapping_is_named_not_a_traceback(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(self._write("[1, 2, 3]"))
+        self.assertIn("must be a mapping", str(cm.exception))
+
+    def test_a_missing_file_is_named(self):
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules("/nonexistent/star-rules.yml")
+        self.assertIn("not found", str(cm.exception))
 
 
 class TestSafetyContract(unittest.TestCase):

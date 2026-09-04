@@ -67,7 +67,10 @@ Three matchers, checked in order; any one hit files the repo:
 
 - `topics` — intersection with the repo's GitHub topics. The most reliable
   signal, because topics are set deliberately by maintainers.
-- `keywords` — substring against name + description + topics, case-insensitive.
+- `keywords` — substring against the **bare repo name** + description + topics,
+  case-insensitive. The owner is deliberately excluded, for the same reason
+  `prefixes` excludes it: a keyword that happened to match an owner login would
+  sweep everything that owner publishes into one list.
   **Substring, not word** — so keep them long and specific. Deriving these
   automatically from a real collection produced `art` for a glitch-art list,
   which then matched `startech`, `smartmeter` and `Chartbuilder`; `rig` matched
@@ -119,5 +122,11 @@ The List mutations are what the GitHub web UI calls, but they are not in the
 public schema docs and carry no compatibility promise. `assert_list_api()`
 introspects for them before any write and fails the run if they are gone — so a
 schema change shows up as a red check, not as a job that quietly files nothing
-for three months. If that fires, the read path and the report still have value;
-disable filing and treat the report as advisory until the engine is updated.
+for three months.
+
+When it fires the run does **not** abort. Filing switches off, the read path
+runs to completion, and the report is produced with a banner saying filing is
+disabled and why — so the ambiguity, rot and drift findings keep their value
+while the engine is being fixed. The job still exits non-zero afterwards, so
+the check goes red. The report reaches the job summary rather than an issue,
+because the failing step stops the issue steps from running.

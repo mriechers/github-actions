@@ -160,24 +160,39 @@ def fetch_lists(token: str) -> dict[str, dict]:
 
 def route(repo: dict, rules: dict) -> list[str]:
     """List names whose rules match this repo. Empty or >1 means ambiguous."""
-    haystack = " ".join(
-        [repo["full_name"].lower(), repo["description"].lower(), " ".join(repo["topics"])]
-    )
+    # The bare repo name, never "owner/name". Including the owner let a keyword
+    # match on the owner login and sweep everything that owner publishes into
+    # one list — the exact hazard `prefixes` was already careful to avoid, let
+    # back in through the other door. Route on what a repo *is*, not on who
+    # happens to publish it.
+    bare_name = repo["full_name"].split("/", 1)[-1].lower()
+    topics = set(repo["topics"])
+    haystack = " ".join([bare_name, repo["description"].lower(), " ".join(repo["topics"])])
     matches = []
     for name, spec in (rules.get("lists") or {}).items():
-        if set(spec.get("topics") or []) & set(repo["topics"]):
+        if set(spec.get("topics") or []) & topics:
             matches.append(name)
             continue
         if any(k.lower() in haystack for k in (spec.get("keywords") or [])):
             matches.append(name)
             continue
-        # Prefixes match the repo name only. Matching the full "owner/name"
-        # would let an owner called `awesome-corp` sweep everything they
-        # publish into the Awesome Lists bucket.
-        bare_name = repo["full_name"].split("/", 1)[-1].lower()
         if any(bare_name.startswith(p.lower()) for p in (spec.get("prefixes") or [])):
             matches.append(name)
     return matches
+
+
+def filing_target(matched: list[str], present: list[str]) -> str | None:
+    """The one list to file into, or None if this repo needs a human.
+
+    BOTH conditions have to hold. Gating on `present` alone meant a repo
+    matching two rules got filed the moment only one of those two lists
+    happened to exist yet — which is exactly the "guess between two matching
+    rules" this engine documents itself as never doing. Two rules matching is
+    ambiguous on its own terms; which lists exist has no bearing on it.
+    """
+    if len(matched) == 1 and len(present) == 1:
+        return present[0]
+    return None
 
 
 def rot_signals(
@@ -220,8 +235,17 @@ def file_repo(token: str, node_id: str, list_id: str) -> None:
     )
 
 
-def build_report(filed, ambiguous, rot, drift, dry_run: bool) -> str:
+def build_report(filed, ambiguous, rot, drift, dry_run: bool, list_api_error: str = "") -> str:
     lines = ["## Star curation report", ""]
+    if list_api_error:
+        lines += [
+            "> **Filing is disabled — the List API check failed.**",
+            f"> {list_api_error}",
+            ">",
+            "> Everything below is read-only and still accurate; treat it as",
+            "> advisory until the engine is updated.",
+            "",
+        ]
     if dry_run:
         lines += ["> Dry run — nothing was filed.", ""]
 
@@ -276,9 +300,23 @@ def load_rules(path: str) -> dict:
     try:
         import yaml  # type: ignore
 
-        return yaml.safe_load(text) or {}
+        parse, err = yaml.safe_load, yaml.YAMLError
     except ImportError:
-        return json.loads(text)
+        parse, err = json.loads, ValueError
+
+    # A malformed rules file is an ordinary thing to do by hand, so it gets a
+    # named error rather than a traceback. Same for a file that parses but
+    # isn't a mapping — a bare list is the natural wrong shape to write here.
+    try:
+        rules = parse(text) or {}
+    except err as exc:
+        raise SystemExit(f"star-curator: could not parse {path}: {exc}") from exc
+    if not isinstance(rules, dict):
+        raise SystemExit(
+            f"star-curator: {path} must be a mapping with a `lists:` key, "
+            f"got {type(rules).__name__}"
+        )
+    return rules
 
 
 def main() -> int:
@@ -293,7 +331,20 @@ def main() -> int:
         raise SystemExit("star-curator: STARS_TOKEN is empty")
 
     rules = load_rules(args.rules)
-    assert_list_api(token)
+
+    # The docs promise a degraded mode when the undocumented List API goes
+    # away: filing off, report still produced and treated as advisory. Raising
+    # here killed the run before a single star was read, so that promise was
+    # never kept. Capture it, disable filing, finish the read-only work, and
+    # exit non-zero at the very end so the check still goes red.
+    list_api_error = ""
+    try:
+        assert_list_api(token)
+    except ApiError as exc:
+        list_api_error = str(exc)
+        print(f"star-curator: {list_api_error}", file=sys.stderr)
+
+    may_file = not args.dry_run and not list_api_error
 
     stars = fetch_stars(token)
     lists = fetch_lists(token)
@@ -311,9 +362,9 @@ def main() -> int:
         # rules are right but the list isn't created yet".
         matched = route(repo, rules)
         present = [m for m in matched if m in lists]
-        if len(present) == 1:
-            target = present[0]
-            if not args.dry_run:
+        target = filing_target(matched, present)
+        if target:
+            if may_file:
                 file_repo(token, repo["node_id"], lists[target]["id"])
             filed.append((repo["full_name"], target))
         else:
@@ -330,7 +381,7 @@ def main() -> int:
         elif count > oversize:
             drift.append(f"**{name}** holds {count} repos (over {oversize})")
 
-    report = build_report(filed, ambiguous, rot, drift, args.dry_run)
+    report = build_report(filed, ambiguous, rot, drift, args.dry_run, list_api_error)
     print(report)
 
     if args.report:
@@ -342,7 +393,9 @@ def main() -> int:
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"has_findings={'true' if has_findings else 'false'}\n")
             fh.write(f"filed_count={len(filed)}\n")
-    return 0
+    # Red check when the List API has moved, but only after the advisory
+    # report has been printed and written.
+    return 1 if list_api_error else 0
 
 
 if __name__ == "__main__":
