@@ -444,14 +444,19 @@ def load_rules(path: str) -> dict:
                     f"contain only strings; found {bad[0]!r}."
                 )
 
-    oversize = rules.get("oversize")
-    if oversize is not None:
+    for key in ("oversize", "stale_before_year"):
+        value = rules.get(key)
+        if value is None:
+            continue
         try:
-            int(oversize)
+            int(value)
         except (TypeError, ValueError):
+            # `stale_before_year` is worse than it looks if it slips through.
+            # rot_signals builds `f"{value}-01-01"` and compares it as a
+            # STRING, so a non-numeric value sorts after every real
+            # YYYY-MM-DD and quietly flags the entire collection as stale.
             raise SystemExit(
-                f"star-curator: `oversize` in {path} must be a number, "
-                f"got {oversize!r}."
+                f"star-curator: `{key}` in {path} must be a number, got {value!r}."
             ) from None
 
     return rules

@@ -385,6 +385,17 @@ class TestLoadRules(unittest.TestCase):
             star_curator.load_rules(self._write('{"oversize": "lots", "lists": {}}'))
         self.assertIn("must be a number", str(cm.exception))
 
+    def test_a_non_numeric_stale_before_year_is_named(self):
+        # Unguarded, this one is quietly destructive to the report: the cutoff
+        # is built as a STRING and compared lexicographically, so a
+        # non-numeric year sorts after every real date and flags the whole
+        # collection as stale.
+        with self.assertRaises(SystemExit) as cm:
+            star_curator.load_rules(
+                self._write('{"stale_before_year": "recently", "lists": {}}')
+            )
+        self.assertIn("must be a number", str(cm.exception))
+
     def test_a_well_formed_file_passes(self):
         rules = star_curator.load_rules(
             self._write('{"oversize": 30, "lists": {"HA": {"topics": ["hacs"], "keywords": []}}}')

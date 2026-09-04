@@ -79,6 +79,10 @@ jobs:
   curate:
     name: Reconcile stars against lists
     runs-on: ubuntu-latest
+    # Generous, because a large collection paginates a lot — but bounded, so a
+    # scheduled job with no retry cannot sit and burn a runner for six hours.
+    # Individual calls already cap at 60s inside the engine.
+    timeout-minutes: 20
     # "One open report at a time" is this workflow's own promise, so it is
     # guarded here rather than left to each caller to remember. Two overlapping
     # runs — a manual dispatch landing on top of the cron — would each close the
