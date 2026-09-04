@@ -132,14 +132,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ inputs.issue-label }}
         run: |
-          # `|| true` would also swallow a permissions failure. Only the
-          # already-exists case is expected, so only that one is forgiven.
-          if ! err=$(gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" \
-                       --color BFD4F2 --description "Star curation report" 2>&1); then
-            case "$err" in
-              *"already exists"*) echo "Label '$LABEL' already exists." ;;
-              *) echo "$err" >&2; exit 1 ;;
-            esac
+          # Ask whether it exists rather than creating and forgiving the
+          # failure. `|| true` would also swallow a permissions error, and
+          # matching gh's "already exists" wording would turn an upstream
+          # phrasing change into a hard failure on an idempotent no-op. This
+          # way every error that reaches the create is a real one.
+          if gh label list --repo "$GITHUB_REPOSITORY" --search "$LABEL" \
+               --json name --jq '.[].name' | grep -qxF "$LABEL"; then
+            echo "Label '$LABEL' already exists."
+          else
+            gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" \
+              --color BFD4F2 --description "Star curation report"
           fi
 
       - name: Close the previous report

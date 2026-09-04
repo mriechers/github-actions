@@ -372,6 +372,11 @@ def main() -> int:
         if target:
             if may_file:
                 file_repo(token, repo["node_id"], lists[target]["id"])
+            # Keep the in-memory view in step, so the drift check below counts
+            # this run's own filings. Otherwise a list crossing the oversize
+            # threshold because of what just happened is not reported until the
+            # next scheduled run, a week later.
+            lists[target]["items"].add(repo["full_name"])
             filed.append((repo["full_name"], target))
         else:
             ambiguous.append((repo, matched, present))
