@@ -74,6 +74,16 @@ class TestRoute(unittest.TestCase):
         r = repo(description="MODEL CONTEXT PROTOCOL server")
         self.assertEqual(route(r, RULES), ["Agent tooling"])
 
+    def test_keywords_match_as_substrings_not_words(self):
+        # Pinning the semantics, because they are sharp. A short keyword hits
+        # inside longer words: `art` files `startech` and `Chartbuilder` into a
+        # glitch-art list. A single match FILES rather than reports, so this is
+        # silent misrouting, not a noisy false positive. If this ever becomes
+        # word-boundary matching, that must be a deliberate change with the
+        # rules files regenerated — not an incidental refactor.
+        rules = {"lists": {"Glitch": {"keywords": ["art"]}}}
+        self.assertEqual(route(repo(full_name="o/startech-enclosure"), rules), ["Glitch"])
+
 
 class TestRotSignals(unittest.TestCase):
     def test_archived_is_flagged(self):

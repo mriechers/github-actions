@@ -68,6 +68,13 @@ Three matchers, checked in order; any one hit files the repo:
 - `topics` — intersection with the repo's GitHub topics. The most reliable
   signal, because topics are set deliberately by maintainers.
 - `keywords` — substring against name + description + topics, case-insensitive.
+  **Substring, not word** — so keep them long and specific. Deriving these
+  automatically from a real collection produced `art` for a glitch-art list,
+  which then matched `startech`, `smartmeter` and `Chartbuilder`; `rig` matched
+  `Brightness` and `Soundflower-Original`. A short keyword is not a small
+  mistake here, because a wrong single match files the repo rather than
+  reporting it. Anything under about five characters wants to be a `topic` or a
+  `prefix` instead.
 - `prefixes` — against the bare repo name. Deliberately not the full
   `owner/name`, so an owner called `awesome-corp` does not sweep everything
   they publish into Awesome Lists.
