@@ -27,6 +27,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 FORMAT="${FORMAT:-table}"
 STUBS=(claude.yml claude-code-review.yml floor.yml)
 SWEEP_BRANCH="chore/reusable-claude-workflows"
+# The workflows are inert without this. Callers forward their own token
+# (CLAUDE.md, "no secrets live here"), and the sweep does not install it.
+SECRET="CLAUDE_CODE_OAUTH_TOKEN"
 
 # FAILING CLOSED. An audit that cannot enumerate must not report "no gaps" --
 # that is the exact shape of the bug this repo already learned once, when a
@@ -46,7 +49,20 @@ if [ "$scope_count" -lt 2 ]; then
   exit 2
 fi
 
-unenrolled=(); partial=(); ok=0; unreadable=()
+unenrolled=(); partial=(); inert=(); ok=0; unreadable=()
+
+secret_state() {  # repo -> present | absent | unknown
+  local repo="$1" out rc
+  out=$(gh api "repos/$repo/actions/secrets/$SECRET" 2>&1); rc=$?
+  [ $rc -eq 0 ] && { echo present; return; }
+  case "$out" in
+    *"Not Found"*|*"404"*) echo absent ;;
+    # 403 means the token cannot read secrets. That is not evidence of absence,
+    # and reporting it as present would be the same fail-open this script
+    # exists to refuse.
+    *) echo unknown ;;
+  esac
+}
 
 for_repo() {  # repo -> prints "count/3" or "ERR"
   local repo="$1" listing rc
@@ -74,7 +90,15 @@ while IFS=$'\t' read -r repo _branch _protected; do
   case "$n" in
     ERR) unreadable+=("$repo") ;;
     0)   unenrolled+=("$repo") ;;
-    3)   ok=$((ok+1)) ;;
+    3)   # Stubs alone are not enrollment. A repo with all three workflows and
+         # no token has a reviewer that errors on every run -- which reads as a
+         # broken review rather than a missing credential, and cost three PRs
+         # on tv-debloat exactly that confusion.
+         case "$(secret_state "$repo")" in
+           present) ok=$((ok+1)) ;;
+           absent)  inert+=("$repo") ;;
+           *)       unreadable+=("$repo (secret unreadable)") ;;
+         esac ;;
     *)   partial+=("$repo ($n/3)") ;;
   esac
 done < <(printf '%s\n' "$scope_out")
@@ -88,7 +112,7 @@ stranded=$(gh api -X GET search/issues \
   --jq '.items[] | "\(.repository_url | split("/") | .[-2:] | join("/"))#\(.number)  \(.created_at[:10])"' \
   2>/dev/null || true)
 
-gaps=$(( ${#unenrolled[@]} + ${#partial[@]} ))
+gaps=$(( ${#unenrolled[@]} + ${#partial[@]} + ${#inert[@]} ))
 
 if [ "$FORMAT" != summary ]; then
   echo "scope: $scope_count repos"
@@ -101,6 +125,11 @@ if [ "$FORMAT" != summary ]; then
     echo "PARTIAL — some stubs missing (${#partial[@]}):"
     printf '  %s\n' "${partial[@]}"; echo
   fi
+  if [ ${#inert[@]} -gt 0 ]; then
+    echo "INERT — all three workflows present, but no $SECRET (${#inert[@]}):"
+    printf '  %s\n' "${inert[@]}"
+    echo "  These fail on every run. Set the secret; the sweep does not."; echo
+  fi
   if [ -n "$stranded" ]; then
     echo "STRANDED sweep PRs — open, awaiting a merge:"
     printf '%s\n' "$stranded" | sed 's/^/  /'; echo
@@ -111,7 +140,7 @@ if [ "$FORMAT" != summary ]; then
   fi
 fi
 
-echo "-- $ok enrolled, ${#unenrolled[@]} unenrolled, ${#partial[@]} partial, ${#unreadable[@]} unreadable"
+echo "-- $ok working, ${#unenrolled[@]} unenrolled, ${#partial[@]} partial, ${#inert[@]} inert, ${#unreadable[@]} unreadable"
 
 # An unreadable repo is not a clean result. Report gaps if anything is wrong.
 [ $gaps -eq 0 ] && [ ${#unreadable[@]} -eq 0 ] && exit 0
