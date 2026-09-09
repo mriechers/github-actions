@@ -45,3 +45,43 @@ Same run settled the long-open assumption. With `protocol_ref` empty, the
 succeeded, and `.protocol/scripts/review_publish.py` actually executed. SHA-pinned
 reusable calls do populate it. `protocol_ref` remains the escape hatch if it ever
 regresses.
+
+## "In scope" is not "installed" — and there is no path here for enrolling a repo
+
+**What went wrong:** `mriechers/tv-debloat` was created 2026-09-07 and had **no
+`.github/` directory at all**. All three of its open PRs classified `NO-REVIEW`
+in `/start`, which read as a review backlog. It wasn't one — the reviewer had
+never been installed.
+
+The confusion came from `scope.sh` working exactly as designed. Its header
+explains that scope is derived at runtime precisely so "a new repo is in scope
+the moment it exists," replacing a hand-edited allowlist that failed open. That
+is true, and it makes enrollment automatic. It does **not** make installation
+automatic: the stubs land only when `sweep.sh` runs, and nothing triggers a
+sweep on repo creation. A new repo is enrolled and uninstalled at the same
+time, indefinitely, until someone releases something unrelated.
+
+**Why it's confusing:** the symptom appears on the *consumer* repo as missing
+reviews, so you go looking for a broken workflow, a bad pin, or a failed run.
+There is nothing to find. The fleet tooling is healthy and the repo is
+correctly in scope; the only fact is that no sweep has run since the repo
+existed.
+
+**Don't:** run the full release flow to enroll a repo. Steps 2–3 (move `v1`,
+re-pin all three stubs) assume a change is shipping. With nothing to release, a
+re-pin rewrites stubs across the entire fleet as a side effect of adding one
+repo — a fleet-wide write to fix a single-repo omission.
+
+**Do:** treat enrollment as its own mode — skip to step 4, preview with `DRY=1`,
+hand the sweep off. The existing pin is already correct; the preview will show
+every current repo as "already on target SHA" and only the new one as an
+update. That shape (one update, everything else skipped) is the confirmation
+that you are enrolling rather than releasing.
+
+**Also:** keep the handoff command short enough not to wrap. The step-4 command
+wrapped in the operator's terminal, split `git pull` across two lines, and
+produced `command not found: pull` — with `cd` and `checkout` having already
+run, so the failure looked like a git problem rather than a paste problem.
+Prefer several short single-purpose lines over one long `&&` chain.
+
+Ref: `mriechers/tv-debloat` PRs #4/#8/#9; repo created 2026-09-07T22:17Z.
