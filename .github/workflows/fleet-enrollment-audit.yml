@@ -15,7 +15,9 @@ name: Fleet enrollment audit
 # to prevent. What is automated here is noticing, not acting.
 #
 # Token: FLEET_AUDIT_TOKEN must be a READ-ONLY fine-grained PAT covering the
-# owners in scripts/fleet-sweep/owners.txt (metadata: read, contents: read).
+# owners in scripts/fleet-sweep/owners.txt (metadata: read, contents: read,
+# secrets: read -- the last one only to see WHETHER CLAUDE_CODE_OAUTH_TOKEN
+# exists, never its value, which GitHub does not expose to any token).
 # The built-in GITHUB_TOKEN cannot see other owners' repos, so it will not do.
 # Do not grant it write — nothing here writes to a consumer, and a token that
 # could push workflow YAML fleet-wide is effectively code execution across

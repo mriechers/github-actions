@@ -47,7 +47,9 @@ found by accident.
 
 `enrollment-audit.sh` closes the *noticing* half of that gap. It is read-only,
 costs one directory listing per repo, and reports repos with none of the stubs,
-repos with some, and sweep PRs left open on protected repos. `.github/workflows/
+repos with some, repos that have all three but no `CLAUDE_CODE_OAUTH_TOKEN`
+(inert -- the workflows run and error), and sweep PRs left open on protected
+repos. `.github/workflows/
 fleet-enrollment-audit.yml` runs it weekly and files a single issue when there
 is anything to report.
 
