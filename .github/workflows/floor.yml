@@ -76,8 +76,12 @@ jobs:
             -o "$RUNNER_TEMP/$tgz"
           echo "${SHA256}  $RUNNER_TEMP/$tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP" gitleaks
-          install "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
-          gitleaks version
+          # Left in RUNNER_TEMP and called by absolute path rather than
+          # installed into /usr/local/bin: nothing here needs to be on PATH,
+          # and a directory we already own raises no question about whether
+          # the runner user may write to a system one.
+          chmod +x "$RUNNER_TEMP/gitleaks"
+          "$RUNNER_TEMP/gitleaks" version
 
       # Exits 1 when it finds anything, which is what fails the job. --redact
       # keeps the secret itself out of the log: a finding must not publish the
@@ -91,4 +95,4 @@ jobs:
           if [ -n "$CONFIG" ]; then
             args+=(--config "$CONFIG")
           fi
-          gitleaks "${args[@]}"
+          "$RUNNER_TEMP/gitleaks" "${args[@]}"

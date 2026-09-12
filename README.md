@@ -48,7 +48,6 @@ jobs:
   floor:
     permissions:
       contents: read
-      pull-requests: write   # gitleaks comments findings on PRs
     uses: mriechers/github-actions/.github/workflows/floor.yml@<sha>
 ```
 
