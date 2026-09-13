@@ -70,9 +70,31 @@ jobs:
           fetch-depth: 0
           # Don't leave the token in .git/config for later steps.
           persist-credentials: false
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+      # The gitleaks CLI, not gitleaks/gitleaks-action: the Action is free only
+      # for personal accounts and refuses to scan an ORGANISATION repo without
+      # a paid licence key. See floor.yml, which carries the same steps for the
+      # same reason. Duplicated rather than nested as a `uses:` because a
+      # same-repo reusable must be referenced by full owner/repo@sha, and this
+      # repo pinning itself would need bumping on every release.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: '8.30.1'
+          SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          set -euo pipefail
+          tgz="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -sSfL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/${tgz}" \
+            -o "$RUNNER_TEMP/$tgz"
+          echo "${SHA256}  $RUNNER_TEMP/$tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP" gitleaks
+          chmod +x "$RUNNER_TEMP/gitleaks"
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Run gitleaks
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/gitleaks" git . --redact --verbose --exit-code 1
 
   lint:
     name: ruff (errors-only by default)
