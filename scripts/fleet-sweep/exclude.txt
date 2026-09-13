@@ -7,3 +7,18 @@
 # stub that calls itself. sweep.sh refuses this independently of this file --
 # removing the line does not enable it.
 mriechers/github-actions
+
+# --- Added 2026-09-11, after the first full fleet sweep enrolled all 84 ---
+#
+# NOTE: an exclude stops FUTURE writes. It does not uninstall the three
+# workflows the 2026-09-11 sweep already placed on these repos. Removing those
+# is a separate, manual step.
+
+# Superseded by ADR-0008 and slated for archive under machine-ops T-07.
+# Enrolling a repo on its way out adds commits nobody will read.
+mriechers/the-lodge
+
+# Org profile repos: a README and a profile/ directory, no code to review and
+# no history to scan. They also had no CLAUDE_CODE_OAUTH_TOKEN, so the reviewer
+# they received can only ever post the vacuous green check described in #53.
+*/.github
