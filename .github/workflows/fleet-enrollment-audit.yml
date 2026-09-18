@@ -1,0 +1,123 @@
+name: Fleet enrollment audit
+
+# Reports which in-scope repos never received the three caller stubs.
+#
+# Why this exists: scope.sh enrolls a repo the moment it exists, but the stubs
+# only land when sweep.sh runs, and nothing triggers a sweep on repo creation.
+# A new repo is therefore in scope and uninstalled at the same time, silently,
+# until someone releases something unrelated. tv-debloat sat that way for four
+# days and was found by accident, after its PRs read as a review backlog that
+# did not exist.
+#
+# This job READS ONLY. It never installs anything. sweep.sh remains the sole
+# writer and remains human-run: a fleet write across ~89 repos is deliberately
+# gated on a person, and a scheduled job is exactly the thing that gate exists
+# to prevent. What is automated here is noticing, not acting.
+#
+# Token: FLEET_AUDIT_TOKEN must be a READ-ONLY fine-grained PAT covering the
+# owners in scripts/fleet-sweep/owners.txt (metadata: read, contents: read,
+# secrets: read -- the last one only to see WHETHER CLAUDE_CODE_OAUTH_TOKEN
+# exists, never its value, which GitHub does not expose to any token).
+# The built-in GITHUB_TOKEN cannot see other owners' repos, so it will not do.
+# Do not grant it write — nothing here writes to a consumer, and a token that
+# could push workflow YAML fleet-wide is effectively code execution across
+# every repo you own.
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'   # Mondays, 14:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write            # the report lands as an issue on THIS repo
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require the audit token
+        env:
+          TOKEN: ${{ secrets.FLEET_AUDIT_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::FLEET_AUDIT_TOKEN is not set. Refusing to run."
+            echo "Without it, scope resolves to zero repos and the audit would"
+            echo "report a clean fleet — the same fail-open shape that let a"
+            echo "hand-maintained allowlist silently unenroll 38 repos."
+            exit 1
+          fi
+
+      - name: Audit enrollment
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_AUDIT_TOKEN }}
+        run: |
+          set +e
+          ./scripts/fleet-sweep/enrollment-audit.sh > audit.txt 2>&1
+          rc=$?
+          set -e
+          cat audit.txt
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # 2 means the audit could not run. That is an infrastructure failure,
+          # not a clean fleet, and must fail the job rather than file a
+          # reassuring issue.
+          if [ "$rc" = "2" ]; then
+            echo "::error::Audit could not enumerate the fleet — see log."
+            exit 1
+          fi
+
+      - name: File or update the report
+        if: steps.audit.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Repos in scope that are missing the caller stubs."
+            echo
+            echo '```'
+            cat audit.txt
+            echo '```'
+            echo
+            echo "To fix, an operator runs the sweep by hand:"
+            echo
+            echo '```'
+            echo "cd ~/Developer/github-actions"
+            echo "DRY=1 ./scripts/fleet-sweep/sweep.sh"
+            echo "./scripts/fleet-sweep/sweep.sh"
+            echo '```'
+            echo
+            echo "Protected repos get a PR instead of a push; those need merging separately."
+            echo
+            echo "_Filed by .github/workflows/fleet-enrollment-audit.yml_"
+          } > body.md
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label "fleet:enrollment" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file body.md
+            echo "updated #$existing"
+          else
+            gh label create "fleet:enrollment" --repo "$GITHUB_REPOSITORY" \
+              --description "Fleet stub enrollment gaps" --color ededed 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Fleet enrollment gaps" --label "fleet:enrollment" --body-file body.md
+          fi
+
+      - name: Close the report when the fleet is clean
+        if: steps.audit.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label "fleet:enrollment" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "Every in-scope repo is enrolled. Closing."
+            echo "closed #$existing"
+          else
+            echo "clean, nothing open"
+          fi
