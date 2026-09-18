@@ -23,14 +23,41 @@ name: Floor (reusable)
 #
 # The permissions block must live in the caller — a reusable can only downgrade
 # the token it is handed, never widen it.
+#
+# Baselining findings the repo cannot fix: a repo whose history carries vendored
+# or third-party material — reviewed on adoption, never hand-edited — has
+# findings no PR can clear, and a permanently red floor is a floor nobody reads.
+# Commit a .gitleaks.toml at the repo ROOT and leave gitleaks-config empty; the
+# scan resolves a root config on its own (see the input's description below):
+#
+#   [extend]
+#   useDefault = true
+#
+#   [[allowlists]]
+#   description = "Vendored third-party code: reviewed on adoption, no live credentials"
+#   paths = ['''^deployments/[^/]+/vendor/.*''']
+#
+# Prefer path allowlists to a .gitleaksignore of fingerprints. A fingerprint is
+# commit:path:rule:line, so on the full-history scan this floor runs, the same
+# content re-appears under every commit that ever touched it: the ignore file
+# grows with history rather than with content, and re-vendoring invalidates it.
+# Measured on one fleet repo, 24 fingerprints covered 16 distinct locations.
+#
+# Scope an allowlist to the directories that are genuinely not ours. It buys the
+# floor back at the cost of not scanning those paths at all, so a real secret
+# committed under one would go unreported.
 
 on:
   workflow_call:
     inputs:
       gitleaks-config:
         description: >-
-          Optional path, in the calling repo, to a custom .gitleaks.toml.
-          Empty uses gitleaks' built-in ruleset.
+          Optional path, in the calling repo, to a .gitleaks.toml kept somewhere
+          other than the repo root. Usually unnecessary, and empty does NOT mean
+          "built-in ruleset": gitleaks resolves its config as 1. --config,
+          2. $GITLEAKS_CONFIG, 3. $GITLEAKS_CONFIG_TOML, 4. <target>/.gitleaks.toml,
+          and only then the built-in rules. The scan target here is the repo root,
+          so a .gitleaks.toml committed there applies with this input left empty.
         required: false
         type: string
         default: ''
