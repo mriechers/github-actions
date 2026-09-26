@@ -21,6 +21,7 @@ network. Hosting it beside the reusables it pins makes that a local check.
 | `scope.sh` | derives the in-scope repo list (read-only) |
 | `sweep.sh` | writes the stubs fleet-wide — **fleet write** |
 | `status.sh` | which repos carry which pin (read-only) |
+| `enrollment-audit.sh` | which repos never got the stubs at all (read-only) |
 | `pause.sh` | disable/enable a workflow fleet-wide — **fleet write**, reversible |
 
 **`sweep.sh` and `pause.sh` are fleet writes. Mark runs them via `!`.** The
@@ -35,6 +36,26 @@ DRY=1 ./scripts/fleet-sweep/sweep.sh    # preview — writes nothing
 ```
 
 See `/release-reusable` for the full walkthrough.
+
+## Enrollment is not automatic — only scope is
+
+`scope.sh` puts a new repo in scope the moment it exists. The stubs still only
+land when `sweep.sh` runs, and nothing triggers a sweep on repo creation, so a
+new repo is enrolled and uninstalled at the same time until someone releases
+something unrelated. `mriechers/tv-debloat` sat that way for four days and was
+found by accident.
+
+`enrollment-audit.sh` closes the *noticing* half of that gap. It is read-only,
+costs one directory listing per repo, and reports repos with none of the stubs,
+repos with some, repos that have all three but no `CLAUDE_CODE_OAUTH_TOKEN`
+(inert -- the workflows run and error), and sweep PRs left open on protected
+repos. `.github/workflows/
+fleet-enrollment-audit.yml` runs it weekly and files a single issue when there
+is anything to report.
+
+The *acting* half stays manual on purpose. A scheduled job that re-pins ~89
+repos is exactly what the "Mark runs it via `!`" gate exists to prevent, so the
+audit never installs anything — it only says what is missing.
 
 ## Scope is derived, not committed
 
