@@ -22,6 +22,7 @@ network. Hosting it beside the reusables it pins makes that a local check.
 | `sweep.sh` | writes the stubs fleet-wide — **fleet write** |
 | `status.sh` | which repos carry which pin (read-only) |
 | `enrollment-audit.sh` | which repos never got the stubs at all (read-only) |
+| `enroll-one.sh` | prepare one new repo's enrollment; prints the commands (read-only) |
 | `pause.sh` | disable/enable a workflow fleet-wide — **fleet write**, reversible |
 
 **`sweep.sh` and `pause.sh` are fleet writes. Mark runs them via `!`.** The
@@ -56,6 +57,46 @@ is anything to report.
 The *acting* half stays manual on purpose. A scheduled job that re-pins ~89
 repos is exactly what the "Mark runs it via `!`" gate exists to prevent, so the
 audit never installs anything — it only says what is missing.
+
+## Enrolling one new repo
+
+Use this when a new repo needs review now rather than at the next release.
+
+```bash
+scripts/fleet-sweep/enroll-one.sh <owner/repo>
+```
+
+It is read-only. It looks up the default branch and whether it is protected,
+reports which stubs and which secret are missing, writes a one-line scope file
+under `$TMPDIR`, and prints the commands for Mark to run with `!`:
+
+1. **The token.** `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <repo> --body "$(get-secret.sh CLAUDE_CODE_OAUTH_TOKEN)"`.
+   Callers forward their own token, and the sweep does not install it. Without
+   it the workflows start and then error.
+2. **A dry run, then the real sweep, scoped to that one file** with
+   `INSCOPE=<tsv>`, so no other repo is touched. On an unprotected default branch
+   the sweep commits the stubs; on a protected one it opens a PR to merge.
+
+**The stale-pin judgment call.** When a reusable changed after the stubs' pin,
+the preflight refuses (check 4), and `enroll-one.sh` adds `ALLOW_STALE_PIN=1` to
+the printed commands and lists every reusable commit since the pin. The flag is
+meant for rollbacks. Enrolling on the old pin is safe only when every listed
+commit is behaviour-free, such as a comments-only change: the new repo then
+carries the same pin as most of the fleet. If any listed change alters
+behaviour, re-pin the fleet first (CLAUDE.md, *Releasing*).
+
+**PRs opened before the sweep are not reviewed.** Their merge ref predates the
+stubs. For each one, run `gh pr update-branch <n> -R <repo>` (a server-side
+merge, not a force-push), then remove and re-add the `claude-review` label.
+
+**One false finding to expect.** The reviewer restores `.claude/`, `CLAUDE.md`
+and `.mcp.json` from the default branch, because the PR head is untrusted. A PR
+that adds or changes those files can therefore read as deleting or reverting
+them. A repo whose skills live entirely under `.claude/` meets this on every PR
+that touches them.
+
+A Claude Code hook prints a reminder pointing here whenever a session creates
+a repo. It only reminds; enrolling stays a human-run step.
 
 ## Scope is derived, not committed
 
