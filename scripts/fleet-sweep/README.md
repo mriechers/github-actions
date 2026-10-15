@@ -67,13 +67,19 @@ scripts/fleet-sweep/enroll-one.sh <owner/repo>
 ```
 
 It is read-only. It looks up the default branch and whether it is protected,
-reports which stubs and which secret are missing, writes a one-line scope file
+reports which stubs, secret and review label are missing, writes a one-line scope file
 under `$TMPDIR`, and prints the commands for Mark to run with `!`:
 
 1. **The token.** `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <repo> --body "$(get-secret.sh CLAUDE_CODE_OAUTH_TOKEN)"`.
    Callers forward their own token, and the sweep does not install it. Without
    it the workflows start and then error.
-2. **A dry run, then the real sweep, scoped to that one file** with
+2. **The review label**, if the repo lacks it:
+   `gh label create claude-review -R <repo> --color 1f6feb --description "…"`.
+   The review stub re-runs a review when this label is added, but neither the
+   sweep nor GitHub creates it. The name is read from the review stub, so it
+   tracks whatever `review_label:` says. An already-enrolled repo that lacks it
+   is reported too.
+3. **A dry run, then the real sweep, scoped to that one file** with
    `INSCOPE=<tsv>`, so no other repo is touched. On an unprotected default branch
    the sweep commits the stubs; on a protected one it opens a PR to merge.
 
