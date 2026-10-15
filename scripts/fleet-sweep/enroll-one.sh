@@ -61,16 +61,39 @@ missing=()
 for s in "${STUBS[@]}"; do
   printf '%s\n' "$have" | grep -qxF "$s" || missing+=("$s")
 done
-if gh secret list -R "$REPO" 2>/dev/null | cut -f1 | grep -qxF "$SECRET"; then has_secret=1; else has_secret=0; fi
+# Capture first, then grep: under pipefail, `gh … | grep -q` can report failure on a
+# match, because grep exits early and gh dies of SIGPIPE.
+secrets=$(gh secret list -R "$REPO" 2>/dev/null | cut -f1 || true)
+if printf '%s\n' "$secrets" | grep -qxF "$SECRET"; then has_secret=1; else has_secret=0; fi
+
+# The review stub re-runs a review when this label is added. Neither the sweep nor
+# GitHub creates it, so a newly enrolled repo has no label to add (found 2026-10-14).
+# Read the name from the stub so it cannot drift from what the workflow listens for.
+LABEL=$(sed -nE 's/^[[:space:]]*review_label:[[:space:]]*([^[:space:]#]+).*/\1/p' "$DIR/stubs/claude-code-review.yml" | head -1)
+LABEL_COLOR="1f6feb"
+LABEL_DESC="Escalate this PR to an agent for a deeper review pass"
+has_label=1
+if [ -n "$LABEL" ]; then
+  # An exact lookup, not a search: no pipe, and a 404 means absent.
+  if ! gh api "repos/$REPO/labels/$LABEL" --silent 2>/dev/null; then has_label=0; fi
+fi
 
 echo "repo:      $REPO"
 echo "branch:    $BRANCH (protected: $PROTECTED)"
 if [ ${#missing[@]} -eq 0 ]; then echo "stubs:     all three present"; else echo "stubs:     missing ${missing[*]}"; fi
 if [ "$has_secret" -eq 1 ]; then echo "secret:    $SECRET set"; else echo "secret:    $SECRET MISSING — the workflows would start and then error"; fi
+if [ "$has_label" -eq 1 ]; then echo "label:     ${LABEL:-?} present"; else echo "label:     $LABEL MISSING — there is no label to add when a review needs re-running"; fi
 
+LABEL_CMD="! gh label create $LABEL -R $REPO --color $LABEL_COLOR --description \"$LABEL_DESC\""
 if [ ${#missing[@]} -eq 0 ] && [ "$has_secret" -eq 1 ]; then
   echo
-  echo "Already enrolled. status.sh reports whether its pin is current."
+  if [ "$has_label" -eq 0 ]; then
+    echo "Enrolled, but missing the review label. Run:"
+    echo
+    echo "  $LABEL_CMD"
+  else
+    echo "Already enrolled. status.sh reports whether its pin is current."
+  fi
   exit 0
 fi
 
@@ -95,6 +118,9 @@ echo "Run these yourself, from $REPO_ROOT:"
 echo
 if [ "$has_secret" -eq 0 ]; then
   echo "  ! gh secret set $SECRET -R $REPO --body \"\$(get-secret.sh $SECRET)\""
+fi
+if [ "$has_label" -eq 0 ]; then
+  echo "  $LABEL_CMD"
 fi
 echo "  ! DRY=1 ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
 echo "  ! ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
