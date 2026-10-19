@@ -156,6 +156,37 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Materialise PR diff for the reviewer
+        # The checkout above is depth 1: a lone merge commit with neither base
+        # nor head in the object store, and the reviewer's sandbox has no `gh`.
+        # Left to recover the diff itself, the review went inconclusive at
+        # random (#78, #75, #70). GitHub already computes the diff, so fetch it
+        # here, deterministically, and hand the agent a file.
+        if: >-
+          steps.publication-eligibility.outputs.publish == 'true' &&
+          steps.review-context.outputs.claude_configured == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p .review-input
+          if ! gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+               > .review-input/pr.diff 2> .review-input/pr.diff.err; then
+            # Too-large diffs (HTTP 406) land here. Say so plainly rather than
+            # leave the agent a partial or empty file to guess from.
+            {
+              echo "DIFF UNAVAILABLE: gh pr diff failed for PR #${PR_NUMBER}."
+              cat .review-input/pr.diff.err
+            } > .review-input/pr.diff
+          fi
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --name-only \
+            > .review-input/files.txt 2>/dev/null || : > .review-input/files.txt
+          rm -f .review-input/pr.diff.err
+          {
+            echo "### Review input"
+            echo "pr.diff: $(wc -l < .review-input/pr.diff) lines; files.txt: $(wc -l < .review-input/files.txt) files"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Claude Code Review
         id: claude-review
         if: >-
@@ -179,6 +210,14 @@ jobs:
             install dependencies, modify repository files, or use `gh`/GitHub APIs
             to create reviews, comments, labels, checks, or merge PRs. Never merge
             a PR.
+
+            The PR diff has already been fetched for you: `.review-input/pr.diff`
+            is the full base-to-head diff and `.review-input/files.txt` lists the
+            changed paths. Review from those files. Do not try to reconstruct the
+            diff from git history — this checkout is shallow and lacks the base
+            and head commits. If `pr.diff` begins with `DIFF UNAVAILABLE`, the
+            verdict is `inconclusive`; quote that line in the summary.
+            `.review-input/` is review scaffolding, not part of the PR.
 
             Use the code-review plugin and these caller-supplied review instructions:
             ${{ inputs.prompt }}
