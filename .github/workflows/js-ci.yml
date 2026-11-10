@@ -3,7 +3,7 @@ name: JS/TS CI (reusable)
 # Workspace-standard JavaScript/TypeScript CI — Tier A reusable. Includes
 # the Floor (gitleaks) plus lint, typecheck, and test. Permissive defaults;
 # consumer repos can ratchet stricter via their own eslint/tsconfig.
-# See the-lodge conventions/CI_STANDARDIZATION.md for the tier model.
+# See docs/ci-standardization.md for the tier model.
 #
 # Why this lives here and not in the-lodge, which is where the tier model is
 # documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
