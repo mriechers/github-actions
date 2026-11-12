@@ -14,7 +14,9 @@ Start every shell command with:
 GA="${GITHUB_ACTIONS_ROOT:-$HOME/Developer/github-actions}"
 ```
 
-If `$GA/scripts/fleet-sweep/` does not exist, stop and ask the operator where the
+Each command runs in a fresh shell, so when the operator names a different checkout,
+put `GITHUB_ACTIONS_ROOT=<path>` on every command, not just the first. If
+`$GA/scripts/fleet-sweep/` does not exist, stop and ask the operator where the
 checkout is.
 
 Every write in this flow (the secret, the sweep) is a fleet write: **you prepare and
@@ -33,13 +35,16 @@ The sweep runs `$GA`'s **working tree**: its `sweep.sh` and the stubs it install
 checkout often sits on a feature branch. Fetch, then compare:
 
 ```bash
+echo "GA=$GA"
 git -C "$GA" fetch -q origin main
-git -C "$GA" diff --quiet origin/main -- scripts/fleet-sweep/ ':!*.md' && echo match
+git -C "$GA" diff --quiet origin/main -- scripts/fleet-sweep/ ':!*.md' \
+  && [ -z "$(git -C "$GA" status --porcelain -- scripts/fleet-sweep/)" ] && echo match
 ```
 
-Done when it prints `match`. Otherwise stop: tell the operator which branch `$GA` is on
-and which fleet-sweep files differ (the same diff with `--stat`).
-Switching its branch is their call; another session may own it.
+Done when it prints `match` for the checkout you meant. Otherwise stop and tell the
+operator what differs: the branch `$GA` is on, the files that differ
+(`git -C "$GA" diff --stat origin/main -- scripts/fleet-sweep/`), and any uncommitted
+or untracked files. Fixing it is their call; another session may own that checkout.
 
 ## 3. Run the planner
 
@@ -47,18 +52,23 @@ Switching its branch is their call; another session may own it.
 "$GA/scripts/fleet-sweep/enroll-one.sh" <owner/repo>
 ```
 
-It is read-only. If the permission classifier blocks it, hand the operator the same
-line with a `!` prefix and read its output from the conversation.
+It writes nothing to GitHub; it writes one scope file under `$TMPDIR`. Run it as its own
+command, not chained after other reads ([GOTCHAS.md](GOTCHAS.md)). If the permission
+classifier still blocks it, hand the operator the line with a `!` prefix, `$GA`
+replaced by the absolute path, and read its output from the conversation.
 
 Branch on the result:
 
-- **"Already enrolled"** (exit 0): report it; the flow is done.
+- **"Already enrolled"** (exit 0): report it and stop. Pin currency is a fleet
+  question for `status.sh` and `/release-reusable`, outside this flow.
 - **refused** (exit 1, excluded repo, owner not in `owners.txt`, the host repo):
   relay the reason and stop. Adding an owner to `owners.txt` is a fleet-scope change
   for the operator to decide.
 - **could not run** (exit 2): relay the error and stop.
 - **A plan**: note the scope file path, the secret status, whether the branch is
-  protected, and whether the commands carry `ALLOW_STALE_PIN=1`.
+  protected, and whether the commands carry `ALLOW_STALE_PIN=1`. The operator's shell
+  must be able to read the scope file: if its path is inside a session sandbox or
+  scratch directory, re-run the planner with `TMPDIR=/tmp`.
 
 ## 4. Judge a stale pin (only when `ALLOW_STALE_PIN=1` appears)
 
@@ -73,8 +83,10 @@ the next release has to chase.
 
 ## 5. Hand the operator the writes
 
-Copy the planner's printed commands verbatim, in two rounds. Prefix each sweep line
-with `cd "$GA" && `, since its paths are relative to `$GA`.
+The operator's `!` shell has no `$GA`, so every command you hand over is literal.
+Take the planner's printed lines, drop their leading `! `, and rewrite each sweep line
+as `! cd <absolute GA path> && <the rest>`, since the sweep's paths are relative. The
+secret line needs no `cd`. Hand them over in two rounds:
 
 1. **The secret line (if printed) and the `DRY=1` sweep**, in one block.
 2. **The real sweep**, only after the dry-run output lands in the conversation and
