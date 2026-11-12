@@ -6,9 +6,19 @@ description: Enroll one GitHub repo in the fleet's automated PR review — plan 
 Enroll one repo in automated PR review. Arguments (optional): $ARGUMENTS — the
 `<owner/repo>`.
 
-`GA` below is `~/Developer/github-actions`. Every write in this flow (the secret,
-the sweep) is a fleet write: **you prepare and verify; the operator runs each write
-with `!`.** Your own commands are reads.
+`$GA` below is your `github-actions` checkout, overridable with `GITHUB_ACTIONS_ROOT`.
+Start every shell command with:
+
+```bash
+# portability-ok: the documented default for the GITHUB_ACTIONS_ROOT override
+GA="${GITHUB_ACTIONS_ROOT:-$HOME/Developer/github-actions}"
+```
+
+If `$GA/scripts/fleet-sweep/` does not exist, stop and ask the operator where the
+checkout is.
+
+Every write in this flow (the secret, the sweep) is a fleet write: **you prepare and
+verify; the operator runs each write with `!`.** Your own commands are reads.
 
 ## 1. Name the repo
 
@@ -17,24 +27,24 @@ Take `<owner/repo>` from the arguments, the reminder hook's message, or
 
 Done when you hold one exact `owner/repo`.
 
-## 2. Check GA's fleet-sweep matches `main`
+## 2. Check `$GA`'s fleet-sweep matches `main`
 
-The sweep runs GA's **working tree**: its `sweep.sh` and the stubs it installs. GA's
+The sweep runs `$GA`'s **working tree**: its `sweep.sh` and the stubs it installs. That
 checkout often sits on a feature branch. Fetch, then compare:
 
 ```bash
-git -C ~/Developer/github-actions fetch -q origin main
-git -C ~/Developer/github-actions diff --quiet origin/main -- scripts/fleet-sweep/ && echo match
+git -C "$GA" fetch -q origin main
+git -C "$GA" diff --quiet origin/main -- scripts/fleet-sweep/ ':!*.md' && echo match
 ```
 
-Done when it prints `match`. Otherwise stop: tell the operator which branch GA is on
-and which fleet-sweep files differ (`git diff --stat origin/main -- scripts/fleet-sweep/`).
-Switching GA's branch is their call; another session may own it.
+Done when it prints `match`. Otherwise stop: tell the operator which branch `$GA` is on
+and which fleet-sweep files differ (the same diff with `--stat`).
+Switching its branch is their call; another session may own it.
 
 ## 3. Run the planner
 
 ```bash
-~/Developer/github-actions/scripts/fleet-sweep/enroll-one.sh <owner/repo>
+"$GA/scripts/fleet-sweep/enroll-one.sh" <owner/repo>
 ```
 
 It is read-only. If the permission classifier blocks it, hand the operator the same
@@ -53,7 +63,7 @@ Branch on the result:
 ## 4. Judge a stale pin (only when `ALLOW_STALE_PIN=1` appears)
 
 The planner lists every reusable commit since the stubs' pin. Read each one's diff
-(`git -C ~/Developer/github-actions show <sha>`) and classify it **behaviour-free**
+(`git -C "$GA" show <sha>`) and classify it **behaviour-free**
 (comments, docs, whitespace) or **behavioural**.
 
 Done when every listed commit has a verdict. All behaviour-free: recommend enrolling
@@ -64,7 +74,7 @@ the next release has to chase.
 ## 5. Hand the operator the writes
 
 Copy the planner's printed commands verbatim, in two rounds. Prefix each sweep line
-with `cd ~/Developer/github-actions && `, since its paths are relative to GA.
+with `cd "$GA" && `, since its paths are relative to `$GA`.
 
 1. **The secret line (if printed) and the `DRY=1` sweep**, in one block.
 2. **The real sweep**, only after the dry-run output lands in the conversation and
@@ -92,6 +102,6 @@ listed. Then close with:
   `.mcp.json` from the default branch, so a PR that changes them can read as
   reverting them.
 
-`scripts/fleet-sweep/README.md` ("Enrolling one new repo") is the source of truth
+`${GA}/scripts/fleet-sweep/README.md` ("Enrolling one new repo") is the source of truth
 for the mechanics; when it and this skill disagree, follow the README and fix this
 file.
