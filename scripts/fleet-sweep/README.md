@@ -61,6 +61,8 @@ audit never installs anything — it only says what is missing.
 ## Enrolling one new repo
 
 Use this when a new repo needs review now rather than at the next release.
+In a Claude Code session, `/enroll-repo <owner/repo>` walks the steps below and
+hands Mark each write.
 
 ```bash
 scripts/fleet-sweep/enroll-one.sh <owner/repo>
