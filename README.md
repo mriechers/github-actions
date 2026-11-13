@@ -38,7 +38,7 @@ they were unreachable in a private repo and had **zero callers fleet-wide**.
 ### The floor
 
 Every non-archived repo in the fleet should call `floor.yml`. It is the Tier 0
-check from the-lodge's `conventions/CI_STANDARDIZATION.md`: *don't ship
+check from [`docs/ci-standardization.md`](docs/ci-standardization.md): *don't ship
 credentials*. Nothing is forwarded — gitleaks runs on the caller's own
 `GITHUB_TOKEN`.
 
