@@ -190,6 +190,24 @@ Same family as the two-marker-formats entry: the verdict exists, the check looks
 **Why it happened:** three-way situation, one side checked. The risk was never that *master* had diverged; it was that the *branch* carried legitimate commits on the same paths, which a checkout-from-master silently discards. Verifying one side and calling it verified is the same shape as reading a green check that tested nothing.
 **Don't:** treat "main hasn't touched this path" as clearance to restore from main. **Do:** also run `git log <merge-base>..<branch> -- <path>`; if anything comes back, that content needs preserving somewhere before the restore, not after.
 
+## A PR stacked on a squash-merged base: add/add conflicts that are safe to take whole (cardigan #362/#414, 2026-10-21)
+**What went wrong:** cardigan#362 had been opened on #359's branch, and #414 on #410's. Both bases were squash-merged long ago. Merging main into each branch stopped on `CONFLICT (add/add)` for every file the base had added. GitHub showed #414 as ~20k lines, because it diffs from the pre-squash merge-base.
+**Why it happened:** a squash merge lands the base's content as a new commit. The dependent branch still carries the original commits, so git sees the same files added on both sides with no shared ancestor.
+**Do:** check whether main's blobs equal the old base commit's blobs: `git rev-parse origin/main:<f>` vs `git rev-parse <old-base-commit>:<f>`. If they match, the branch side is lossless, so `git checkout --ours <f>` takes the branch's later edits. Where main changed the file afterwards (formatting, a later fix), resolve hunk by hunk instead. Then prove the result: `git diff origin/main HEAD | git patch-id` must equal `git diff <old-base-commit> <pr-head> | git patch-id`, meaning the diff against main is exactly the PR's own commits. **Don't** trust GitHub's file count for these PRs. Diff tree-to-tree against main.
+
+## The review watcher's `since` must be real clock output (cardigan #362, 2026-10-21)
+**What went wrong:** I started a watcher with `since=17:55:00Z` that I typed by hand. The real time was 17:52. A verdict posted before 17:55 would never have matched, and the watcher would have polled until its timeout, with the review sitting there finished.
+**Do:** take `since` from `date -u +%Y-%m-%dT%H:%M:%SZ`, captured just before posting the review request, never from a time you estimated. A since-time a little early is harmless; a since-time a little late hides the verdict.
+
+## Two reviewer workflows, two surfaces — the re-review lands where the first review didn't (wc-social#1, 2026-11-07)
+**What went wrong:** On a freshly enrolled repo, the first-round verdict came from the push/PR-triggered **Claude Code Review** workflow as a **formal review**. I fixed both nits, posted `@claude please review` per step 6, then waited with a loop polling `.reviews[]` for one on the new head SHA. The mention is handled by a **different** workflow (**Claude Code**, `issue_comment`), which posted its verdict — "No blockers. This is fine to merge." — as an **issue comment**, edited in place, 50 seconds later. The loop spun for 10 minutes until it timed out, while the verdict sat on the surface it wasn't watching.
+**Why it happened:** I keyed the wait on the surface where *round 1's* verdict appeared. In the fleet-sweep stubs, the reviewer that runs automatically and the one `@claude` summons are separate jobs with different output surfaces. This is the mirror image of the 2026-08-29 entry, which read `.comments` when the verdict was in a formal review.
+**Don't:** wait on a single surface, or assume the re-review will post wherever the first review did. **Do:** in step 7, poll the newest issue comment's body *and* the reviews for the head SHA, and stop on whichever settles first:
+```bash
+gh api repos/<r>/issues/<n>/comments --jq 'sort_by(.updated_at)|last|.body[0:80]'
+gh pr view <n> --repo <r> --json reviews --jq "[.reviews[]|select(.commit.oid==\"$HEAD\")]|length"
+```
+
 ## A repo's review trigger can move to `labeled` — then step 6's mention starts the wrong agent (cardigan #515/#517, 2026-11-06)
 **What went wrong:** Following step 6, I re-triggered review on public-media-work/cardigan #515 and #517 by posting `@claude please review`. By then, that repo's `claude-code-review.yml` called a hosted reusable reviewer that triggers on the `labeled` event. The mention no longer re-runs the reviewer. It starts the **interactive** `claude` agent, which can push commits to the PR branch. The reviews landed anyway, from the label path. Each mention was an unneeded, unattended agent run with push access.
 **Why it happened:** step 6 hard-codes the comment trigger as if every repo used it. Triggers change per repo and over time, and nothing in the loop checks which one is live.
