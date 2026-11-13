@@ -198,3 +198,12 @@ Same family as the two-marker-formats entry: the verdict exists, the check looks
 ## The review watcher's `since` must be real clock output (cardigan #362, 2026-10-21)
 **What went wrong:** I started a watcher with `since=17:55:00Z` that I typed by hand. The real time was 17:52. A verdict posted before 17:55 would never have matched, and the watcher would have polled until its timeout, with the review sitting there finished.
 **Do:** take `since` from `date -u +%Y-%m-%dT%H:%M:%SZ`, captured just before posting the review request, never from a time you estimated. A since-time a little early is harmless; a since-time a little late hides the verdict.
+
+## Two reviewer workflows, two surfaces — the re-review lands where the first review didn't (wc-social#1, 2026-11-07)
+**What went wrong:** On a freshly enrolled repo, the first-round verdict came from the push/PR-triggered **Claude Code Review** workflow as a **formal review**. I fixed both nits, posted `@claude please review` per step 6, then waited with a loop polling `.reviews[]` for one on the new head SHA. The mention is handled by a **different** workflow (**Claude Code**, `issue_comment`), which posted its verdict — "No blockers. This is fine to merge." — as an **issue comment**, edited in place, 50 seconds later. The loop spun for 10 minutes until it timed out, while the verdict sat on the surface it wasn't watching.
+**Why it happened:** I keyed the wait on the surface where *round 1's* verdict appeared. In the fleet-sweep stubs, the reviewer that runs automatically and the one `@claude` summons are separate jobs with different output surfaces. This is the mirror image of the 2026-08-29 entry, which read `.comments` when the verdict was in a formal review.
+**Don't:** wait on a single surface, or assume the re-review will post wherever the first review did. **Do:** in step 7, poll the newest issue comment's body *and* the reviews for the head SHA, and stop on whichever settles first:
+```bash
+gh api repos/<r>/issues/<n>/comments --jq 'sort_by(.updated_at)|last|.body[0:80]'
+gh pr view <n> --repo <r> --json reviews --jq "[.reviews[]|select(.commit.oid==\"$HEAD\")]|length"
+```
