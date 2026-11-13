@@ -126,27 +126,56 @@ else
 fi
 echo "scope: $(wc -l < "$SCOPE_FILE" | tr -d ' ') repos"
 
-put_file() {  # repo path localfile branch
-  local repo="$1" path="$2" src="$3" branch="$4" sha content ref
-  # Skip only when the remote already references the SAME pinned SHA, so a
-  # re-pin updates instead of being skipped.
-  ref=$(pin_of "$src")
-  if [ -n "$ref" ] && gh api "repos/$repo/contents/$path?ref=$branch" --jq '.content' 2>/dev/null \
-       | base64 -d 2>/dev/null | grep -q "$ref"; then
-    echo "  = $path already at ${ref:0:8}, skip"; return 0
-  fi
-  if [ "$DRY" = 1 ]; then echo "  DRY would PUT $path on $branch"; return 0; fi
-  content=$(base64 < "$src" | tr -d '\n')
-  # This gh leaks 404/403 JSON to stdout; branch on exit status, not output.
-  sha=""; if out=$(gh api "repos/$repo/contents/$path?ref=$branch" --jq '.sha' 2>/dev/null); then sha="$out"; fi
+# All stale stubs land in ONE commit. The sweep used to PUT each stub through
+# the Contents API, which is one commit per file — three pushes per repo, so
+# three Floor runs. On a repo whose floor is already red that is three failure
+# notifications per repo per sweep, carrying no new information (the 2026-10-21
+# sweep produced 60 in a day). createCommitOnBranch takes several files in one
+# commit, is signed like the Contents API, and refuses via expectedHeadOid if
+# the branch moved under us instead of writing onto someone else's push.
+COMMIT_MUTATION='mutation($input: CreateCommitOnBranchInput!) {
+  createCommitOnBranch(input: $input) { commit { oid } }
+}'
+MSG_HEADLINE="${MSG%%$'\n'*}"
+MSG_BODY="${MSG#*$'\n'}"; MSG_BODY="${MSG_BODY#$'\n'}"
+
+commit_stubs() {  # repo branch
+  local repo="$1" branch="$2" path src ref head additions="[]" names="" payload out
+  for pair in "$INTERACTIVE:$STUB_I" "$REVIEW:$STUB_R" "$FLOOR:$STUB_F"; do
+    path="${pair%%:*}"; src="${pair#*:}"
+    # Skip only when the remote already references the SAME pinned SHA, so a
+    # re-pin updates instead of being skipped.
+    ref=$(pin_of "$src")
+    if [ -n "$ref" ] && gh api "repos/$repo/contents/$path?ref=$branch" --jq '.content' 2>/dev/null \
+         | base64 -d 2>/dev/null | grep -q "$ref"; then
+      echo "  = $path already at ${ref:0:8}, skip"; continue
+    fi
+    additions=$(jq -c --arg p "$path" --arg c "$(base64 < "$src" | tr -d '\n')" \
+      '. + [{path: $p, contents: $c}]' <<<"$additions")
+    names="$names $path"
+  done
+  [ "$additions" = "[]" ] && return 0
+  if [ "$DRY" = 1 ]; then echo "  DRY would commit$names on $branch (one commit)"; return 0; fi
+
   # set -e is suppressed inside process_repo (it runs as an `if (...)`
-  # condition), so a failed PUT must be caught here rather than abort.
-  if err=$(gh api --method PUT "repos/$repo/contents/$path" \
-       -f message="$MSG" -f content="$content" -f branch="$branch" \
-       ${sha:+-f sha="$sha"} 2>&1 >/dev/null); then
-    echo "  ✓ PUT $path on $branch"
+  # condition), so every failure must be caught here rather than abort.
+  if ! head=$(gh api "repos/$repo/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null) || [ -z "$head" ]; then
+    echo "  ✗ could not resolve head of '$branch' — nothing written"
+    return 1
+  fi
+  payload=$(jq -n --arg q "$COMMIT_MUTATION" --arg repo "$repo" --arg b "$branch" \
+    --arg h "$head" --arg hl "$MSG_HEADLINE" --arg bd "$MSG_BODY" --argjson adds "$additions" \
+    '{query: $q, variables: {input: {
+        branch: {repositoryNameWithOwner: $repo, branchName: $b},
+        expectedHeadOid: $h,
+        message: {headline: $hl, body: $bd},
+        fileChanges: {additions: $adds}}}}')
+  # A GraphQL error can arrive with a 200, so trust only a returned oid.
+  out=$(gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid // empty' <<<"$payload" 2>&1) || true
+  if [[ "$out" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "  ✓ committed$names on $branch as ${out:0:8}"
   else
-    echo "  ✗ FAILED PUT $path on $branch — $(printf '%s' "$err" | tr '\n' ' ' | head -c 140)"
+    echo "  ✗ FAILED commit on $branch — $(printf '%s' "$out" | tr '\n' ' ' | head -c 140)"
     return 1
   fi
 }
@@ -176,9 +205,7 @@ process_repo() {  # repo branch protected
         return 1
       fi
     fi
-    put_file "$repo" "$INTERACTIVE" "$STUB_I" "$br" || rc=1
-    put_file "$repo" "$REVIEW" "$STUB_R" "$br" || rc=1
-    put_file "$repo" "$FLOOR" "$STUB_F" "$br" || rc=1
+    commit_stubs "$repo" "$br" || rc=1
     if [ "$DRY" != 1 ]; then
       gh pr create --repo "$repo" --base "$branch" --head "$br" \
         --title "chore: use central reusable Claude workflows + CI floor" \
@@ -186,9 +213,7 @@ process_repo() {  # repo branch protected
         || echo "  (PR exists or none needed)"
     fi
   else
-    put_file "$repo" "$INTERACTIVE" "$STUB_I" "$branch" || rc=1
-    put_file "$repo" "$REVIEW" "$STUB_R" "$branch" || rc=1
-    put_file "$repo" "$FLOOR" "$STUB_F" "$branch" || rc=1
+    commit_stubs "$repo" "$branch" || rc=1
   fi
   return $rc
 }

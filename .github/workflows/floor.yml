@@ -2,7 +2,7 @@ name: Floor (reusable)
 
 # Workspace-standard Tier 0 "floor": a full-history secrets scan that every
 # non-archived repo in the fleet should run, regardless of language or scale.
-# See the-lodge conventions/CI_STANDARDIZATION.md for the tier model.
+# See docs/ci-standardization.md for the tier model.
 #
 # Why this lives here and not in the-lodge, which is where the tier model is
 # documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
