@@ -61,16 +61,62 @@ missing=()
 for s in "${STUBS[@]}"; do
   printf '%s\n' "$have" | grep -qxF "$s" || missing+=("$s")
 done
-if gh secret list -R "$REPO" 2>/dev/null | cut -f1 | grep -qxF "$SECRET"; then has_secret=1; else has_secret=0; fi
+# Capture first, then grep: under pipefail, `gh … | grep -q` can report failure on a
+# match, because grep exits early and gh dies of SIGPIPE.
+secrets=$(gh secret list -R "$REPO" 2>/dev/null | cut -f1 || true)
+if printf '%s\n' "$secrets" | grep -qxF "$SECRET"; then has_secret=1; else has_secret=0; fi
+
+# The review stub re-runs a review when this label is added. Neither the sweep nor
+# GitHub creates it, so a newly enrolled repo has no label to add (found 2026-10-14).
+# Read the name from the stub so it cannot drift from what the workflow listens for.
+LABEL=$(sed -nE 's/^[[:space:]]*review_label:[[:space:]]*([^[:space:]#]+).*/\1/p' "$DIR/stubs/claude-code-review.yml" | head -1)
+LABEL_COLOR="1f6feb"
+LABEL_DESC="Escalate this PR to an agent for a deeper review pass"
+has_label=1
+if [ -n "$LABEL" ]; then
+  # An exact lookup, not a search: no pipe. Only a 404 means absent — an auth,
+  # network or rate-limit failure is "unknown", not "missing" (#80 review).
+  if ! label_err=$(gh api "repos/$REPO/labels/$LABEL" --silent 2>&1); then
+    if printf '%s' "$label_err" | grep -q 'HTTP 404'; then has_label=0; else has_label=2; fi
+  fi
+fi
+
+# The optional review App (README: "GitHub App publishing"). Without both halves the
+# review still runs but publishes as github-actions[bot] and cannot formally approve.
+# Repo- and org-level both count; capture first, then grep (see above).
+app_vars=$( { gh variable list -R "$REPO" 2>/dev/null | cut -f1
+              gh api "repos/$REPO/actions/organization-variables" --jq '.variables[].name' 2>/dev/null; } || true)
+app_secrets=$( { printf '%s\n' "$secrets"
+                 gh api "repos/$REPO/actions/organization-secrets" --jq '.secrets[].name' 2>/dev/null; } || true)
+if printf '%s\n' "$app_vars" | grep -qxF REVIEW_APP_ID; then has_app_id=1; else has_app_id=0; fi
+if printf '%s\n' "$app_secrets" | grep -qxF REVIEW_APP_PRIVATE_KEY; then has_app_key=1; else has_app_key=0; fi
 
 echo "repo:      $REPO"
 echo "branch:    $BRANCH (protected: $PROTECTED)"
 if [ ${#missing[@]} -eq 0 ]; then echo "stubs:     all three present"; else echo "stubs:     missing ${missing[*]}"; fi
 if [ "$has_secret" -eq 1 ]; then echo "secret:    $SECRET set"; else echo "secret:    $SECRET MISSING — the workflows would start and then error"; fi
+case "$has_label" in
+  1) echo "label:     ${LABEL:-?} present" ;;
+  0) echo "label:     $LABEL MISSING — there is no label to add when a review needs re-running" ;;
+  *) echo "label:     $LABEL UNKNOWN — the lookup failed for a reason other than 404; check gh auth and re-run" ;;
+esac
+case "$has_app_id$has_app_key" in
+  11) echo "app:       REVIEW_APP_ID and REVIEW_APP_PRIVATE_KEY set" ;;
+  00) echo "app:       not configured (optional) — reviews post as github-actions[bot] and cannot formally approve" ;;
+  10) echo "app:       REVIEW_APP_ID set but REVIEW_APP_PRIVATE_KEY MISSING — half-configured; reviews silently fall back to github-actions[bot]" ;;
+  01) echo "app:       REVIEW_APP_PRIVATE_KEY set but REVIEW_APP_ID MISSING — half-configured; reviews silently fall back to github-actions[bot]" ;;
+esac
 
+LABEL_CMD="! gh label create $LABEL -R $REPO --color $LABEL_COLOR --description \"$LABEL_DESC\""
 if [ ${#missing[@]} -eq 0 ] && [ "$has_secret" -eq 1 ]; then
   echo
-  echo "Already enrolled. status.sh reports whether its pin is current."
+  if [ "$has_label" -eq 0 ]; then
+    echo "Enrolled, but missing the review label. Run:"
+    echo
+    echo "  $LABEL_CMD"
+  else
+    echo "Already enrolled. status.sh reports whether its pin is current."
+  fi
   exit 0
 fi
 
@@ -91,13 +137,18 @@ printf '%s\t%s\t%s\n' "$REPO" "$BRANCH" "$PROTECTED" > "$TSV"
 echo
 echo "Scope file: $TSV"
 echo
-echo "Run these yourself, from $REPO_ROOT:"
+# Each line is paste-ready from any directory: the operator usually runs these with
+# `!` in the new repo's session, where a relative sweep path does not resolve (#90).
+echo "Run these yourself (each line works from any directory):"
 echo
 if [ "$has_secret" -eq 0 ]; then
   echo "  ! gh secret set $SECRET -R $REPO --body \"\$(get-secret.sh $SECRET)\""
 fi
-echo "  ! DRY=1 ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
-echo "  ! ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
+if [ "$has_label" -eq 0 ]; then
+  echo "  $LABEL_CMD"
+fi
+echo "  ! (cd '$REPO_ROOT' && DRY=1 ${STALE}INSCOPE='$TSV' scripts/fleet-sweep/sweep.sh)"
+echo "  ! (cd '$REPO_ROOT' && ${STALE}INSCOPE='$TSV' scripts/fleet-sweep/sweep.sh)"
 echo
 if [ "$PROTECTED" = "true" ]; then
   echo "The branch is protected, so the sweep opens a PR on $REPO instead of committing. Merge it."
