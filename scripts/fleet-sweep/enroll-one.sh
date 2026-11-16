@@ -74,15 +74,38 @@ LABEL_COLOR="1f6feb"
 LABEL_DESC="Escalate this PR to an agent for a deeper review pass"
 has_label=1
 if [ -n "$LABEL" ]; then
-  # An exact lookup, not a search: no pipe, and a 404 means absent.
-  if ! gh api "repos/$REPO/labels/$LABEL" --silent 2>/dev/null; then has_label=0; fi
+  # An exact lookup, not a search: no pipe. Only a 404 means absent — an auth,
+  # network or rate-limit failure is "unknown", not "missing" (#80 review).
+  if ! label_err=$(gh api "repos/$REPO/labels/$LABEL" --silent 2>&1); then
+    if printf '%s' "$label_err" | grep -q 'HTTP 404'; then has_label=0; else has_label=2; fi
+  fi
 fi
+
+# The optional review App (README: "GitHub App publishing"). Without both halves the
+# review still runs but publishes as github-actions[bot] and cannot formally approve.
+# Repo- and org-level both count; capture first, then grep (see above).
+app_vars=$( { gh variable list -R "$REPO" 2>/dev/null | cut -f1
+              gh api "repos/$REPO/actions/organization-variables" --jq '.variables[].name' 2>/dev/null; } || true)
+app_secrets=$( { printf '%s\n' "$secrets"
+                 gh api "repos/$REPO/actions/organization-secrets" --jq '.secrets[].name' 2>/dev/null; } || true)
+if printf '%s\n' "$app_vars" | grep -qxF REVIEW_APP_ID; then has_app_id=1; else has_app_id=0; fi
+if printf '%s\n' "$app_secrets" | grep -qxF REVIEW_APP_PRIVATE_KEY; then has_app_key=1; else has_app_key=0; fi
 
 echo "repo:      $REPO"
 echo "branch:    $BRANCH (protected: $PROTECTED)"
 if [ ${#missing[@]} -eq 0 ]; then echo "stubs:     all three present"; else echo "stubs:     missing ${missing[*]}"; fi
 if [ "$has_secret" -eq 1 ]; then echo "secret:    $SECRET set"; else echo "secret:    $SECRET MISSING — the workflows would start and then error"; fi
-if [ "$has_label" -eq 1 ]; then echo "label:     ${LABEL:-?} present"; else echo "label:     $LABEL MISSING — there is no label to add when a review needs re-running"; fi
+case "$has_label" in
+  1) echo "label:     ${LABEL:-?} present" ;;
+  0) echo "label:     $LABEL MISSING — there is no label to add when a review needs re-running" ;;
+  *) echo "label:     $LABEL UNKNOWN — the lookup failed for a reason other than 404; check gh auth and re-run" ;;
+esac
+case "$has_app_id$has_app_key" in
+  11) echo "app:       REVIEW_APP_ID and REVIEW_APP_PRIVATE_KEY set" ;;
+  00) echo "app:       not configured (optional) — reviews post as github-actions[bot] and cannot formally approve" ;;
+  10) echo "app:       REVIEW_APP_ID set but REVIEW_APP_PRIVATE_KEY MISSING — half-configured; reviews silently fall back to github-actions[bot]" ;;
+  01) echo "app:       REVIEW_APP_PRIVATE_KEY set but REVIEW_APP_ID MISSING — half-configured; reviews silently fall back to github-actions[bot]" ;;
+esac
 
 LABEL_CMD="! gh label create $LABEL -R $REPO --color $LABEL_COLOR --description \"$LABEL_DESC\""
 if [ ${#missing[@]} -eq 0 ] && [ "$has_secret" -eq 1 ]; then
@@ -114,7 +137,9 @@ printf '%s\t%s\t%s\n' "$REPO" "$BRANCH" "$PROTECTED" > "$TSV"
 echo
 echo "Scope file: $TSV"
 echo
-echo "Run these yourself, from $REPO_ROOT:"
+# Each line is paste-ready from any directory: the operator usually runs these with
+# `!` in the new repo's session, where a relative sweep path does not resolve (#90).
+echo "Run these yourself (each line works from any directory):"
 echo
 if [ "$has_secret" -eq 0 ]; then
   echo "  ! gh secret set $SECRET -R $REPO --body \"\$(get-secret.sh $SECRET)\""
@@ -122,8 +147,8 @@ fi
 if [ "$has_label" -eq 0 ]; then
   echo "  $LABEL_CMD"
 fi
-echo "  ! DRY=1 ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
-echo "  ! ${STALE}INSCOPE=$TSV scripts/fleet-sweep/sweep.sh"
+echo "  ! (cd '$REPO_ROOT' && DRY=1 ${STALE}INSCOPE='$TSV' scripts/fleet-sweep/sweep.sh)"
+echo "  ! (cd '$REPO_ROOT' && ${STALE}INSCOPE='$TSV' scripts/fleet-sweep/sweep.sh)"
 echo
 if [ "$PROTECTED" = "true" ]; then
   echo "The branch is protected, so the sweep opens a PR on $REPO instead of committing. Merge it."

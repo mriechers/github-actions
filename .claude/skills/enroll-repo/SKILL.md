@@ -84,9 +84,9 @@ the next release has to chase.
 ## 5. Hand the operator the writes
 
 The operator's `!` shell has no `$GA`, so every command you hand over is literal.
-Take the planner's printed lines, drop their leading `! `, and rewrite each sweep line
-as `! cd <absolute GA path> && <the rest>`, since the sweep's paths are relative. The
-secret line needs no `cd`. Hand them over in two rounds:
+The planner prints each line paste-ready — the sweep lines already carry their own
+absolute `(cd '<GA>' && …)` — so hand them over exactly as printed, without adding a
+second `! ` or `cd`. Hand them over in two rounds:
 
 1. **The secret line (if printed) and the `DRY=1` sweep**, in one block.
 2. **The real sweep**, only after the dry-run output lands in the conversation and
