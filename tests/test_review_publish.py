@@ -249,6 +249,32 @@ class TestEligibility(unittest.TestCase):
             [self._check("Review: approve", status="in_progress")])
         self.assertTrue(publish)
 
+    def test_not_reviewed_check_does_not_block_a_real_review(self):
+        # #53: the neutral no-credential check is not a review. A later run
+        # with the credential (a human relabelling a Dependabot PR) must
+        # still publish, and must not spend the inconclusive retry budget.
+        publish, reason = decide_eligibility(
+            [self._check(review_publish.NOT_REVIEWED_TITLE)] * 5)
+        self.assertTrue(publish)
+        self.assertEqual(reason, "no completed review check for this head")
+
+
+class TestNotReviewedCheck(unittest.TestCase):
+    def test_payload_is_a_neutral_check_naming_the_cause(self):
+        check = review_publish.build_not_reviewed_check("abc123", "dependabot[bot]")
+        self.assertEqual(check["name"], review_publish.CHECK_NAME)
+        self.assertEqual(check["head_sha"], "abc123")
+        self.assertEqual(check["status"], "completed")
+        self.assertEqual(check["conclusion"], "neutral")
+        self.assertEqual(check["output"]["title"],
+                         review_publish.NOT_REVIEWED_TITLE)
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", check["output"]["summary"])
+        self.assertIn("dependabot[bot]", check["output"]["summary"])
+
+    def test_title_is_distinct_from_every_review_title(self):
+        # A review title would make eligibility treat it as conclusive.
+        self.assertFalse(review_publish.NOT_REVIEWED_TITLE.startswith("Review:"))
+
 
 class TestWorkflowConsistency(unittest.TestCase):
     """Backstop: while any label/verdict strings remain inlined in

@@ -17,6 +17,9 @@ Subcommands (each reads env vars the workflow step provides):
     eligibility  Decide whether to publish for this head: skip when a
                  conclusive completed check exists; allow bounded retries
                  after inconclusive ones.
+    not-reviewed Write claude-review-check.json: a neutral check saying no
+                 review ran because no Claude credential reached the job
+                 (#53). Used only where failing the job is not wanted.
 
 The verdict vocabulary is the workflow's structured-output enum; the label
 vocabulary is pr_label.TAXONOMY. This module is the only place the two are
@@ -39,6 +42,9 @@ import pr_label  # noqa: E402
 import pr_record  # noqa: E402
 
 CHECK_NAME = "Claude autonomous review"
+# Deliberately not "Review: ..." — it records that no review happened, so
+# eligibility must never read it as a conclusive (or inconclusive) review.
+NOT_REVIEWED_TITLE = "Not reviewed: no Claude credential"
 SUMMARY_LIMIT = 60000
 
 # verdict -> (review:* label, check conclusion, record outcome)
@@ -268,7 +274,8 @@ def decide_eligibility(check_runs: Sequence[Dict],
     sandbox the review of record forever."""
     ours = [c for c in check_runs
             if c.get("name") == CHECK_NAME
-            and (c.get("status") or "").lower() == "completed"]
+            and (c.get("status") or "").lower() == "completed"
+            and ((c.get("output") or {}).get("title") or "") != NOT_REVIEWED_TITLE]
     inconclusive = [
         c for c in ours
         if ((c.get("output") or {}).get("title") or "") == "Review: inconclusive"]
@@ -282,6 +289,33 @@ def decide_eligibility(check_runs: Sequence[Dict],
         return True, (f"retrying after {len(inconclusive)} inconclusive "
                       f"attempt(s) (bound {bound})")
     return True, "no completed review check for this head"
+
+
+def build_not_reviewed_check(head_sha: str, actor: str) -> Dict:
+    return {
+        "name": CHECK_NAME,
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "neutral",
+        "output": {
+            "title": NOT_REVIEWED_TITLE,
+            "summary": (
+                "No review ran. The job received no `CLAUDE_CODE_OAUTH_TOKEN`, "
+                f"which is expected for a run triggered by `{actor}`: GitHub "
+                "withholds Actions secrets from Dependabot-triggered workflows. "
+                "This is not a verdict. To review this PR, add the "
+                "review label yourself — a run you trigger gets the secret."
+            ),
+        },
+    }
+
+
+def cmd_not_reviewed() -> int:
+    check = build_not_reviewed_check(os.environ["PR_HEAD_SHA"],
+                                     os.environ["ACTOR"])
+    with open("claude-review-check.json", "w", encoding="utf-8") as file:
+        json.dump(check, file)
+    return 0
 
 
 def cmd_eligibility() -> int:
@@ -298,7 +332,8 @@ def cmd_eligibility() -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     commands = {"validate": cmd_validate, "compose": cmd_compose,
-                "eligibility": cmd_eligibility}
+                "eligibility": cmd_eligibility,
+                "not-reviewed": cmd_not_reviewed}
     if len(argv) != 1 or argv[0] not in commands:
         sys.stderr.write(
             f"usage: review_publish.py ({' | '.join(sorted(commands))})\n")

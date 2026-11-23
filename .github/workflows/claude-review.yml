@@ -156,6 +156,40 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Refuse to pass without a Claude credential
+        # #53: with no token every review step below is skipped, and the job
+        # used to end green — indistinguishable from a clean review. Fail it
+        # instead. The one exception is Dependabot: GitHub withholds Actions
+        # secrets from runs it triggers, so failing would turn every Dependabot
+        # PR in the fleet red. Those get a neutral check that says "not
+        # reviewed", which eligibility ignores so a later real run still publishes.
+        if: steps.review-context.outputs.claude_configured != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token-context.outputs.app_backed == 'true' && steps.app-token.outputs.token || github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
+            python3 .protocol/scripts/review_publish.py not-reviewed
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+              --input claude-review-check.json >/dev/null \
+              || echo "::warning::could not post the not-reviewed check"
+            rm -f claude-review-check.json
+            {
+              echo "### Claude review: not run"
+              echo "No \`CLAUDE_CODE_OAUTH_TOKEN\` reached this job. That is expected for a"
+              echo "Dependabot-triggered run, so this is reported as a neutral check, not a failure."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### Claude review: not run — no credential"
+            echo "The caller passed no \`claude_code_oauth_token\`. Set the repository secret"
+            echo "\`CLAUDE_CODE_OAUTH_TOKEN\`, then re-run or re-add the review label."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::No CLAUDE_CODE_OAUTH_TOKEN reached claude-review, so no review ran. Set the repository secret CLAUDE_CODE_OAUTH_TOKEN."
+          exit 1
+
       - name: Materialise PR diff for the reviewer
         # The checkout above is depth 1: a lone merge commit with neither base
         # nor head in the object store, and the reviewer's sandbox has no `gh`.
