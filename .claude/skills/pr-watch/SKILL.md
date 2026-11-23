@@ -30,15 +30,17 @@ SHA → the Leader notices → the teammate re-reviews).
 | `--preview` | **Dry run** — print what would be reviewed; post nothing |
 | `--status` | Summarize live teammates + the last cycle |
 | `--voice <a\|b\|c>` / `--voice off` / `--voice list` | **Modifier** (composes with any mode) — set/clear/show the review prose rotation |
+| `--owners <a,b>` / `--owners default` | **Modifier** (composes with any mode) — set/clear a persistent owner scope |
 
 The scan helper is `scripts/pr_scan.py` (stdlib only). Default owners:
-`mriechers`, `public-media-work`, `Wonder-Cabinet-Productions` — pass `--owners a,b` to
-override. Marker of record: `<!-- pr-watch: sha=<head> -->`.
+`mriechers`, `public-media-work`, `Wonder-Cabinet-Productions`. `<owners>` below always
+means **the `owners[]` list in round state when set, else those defaults** — narrow it with
+the `--owners` modifier (Step 1). Marker of record: `<!-- pr-watch: sha=<head> -->`.
 
 ## Detect the mode
 
-**Step 1 — consume `--voice` first (it is a modifier, not a mode).** Before selecting a
-mode, scan `$ARGUMENTS` for `--voice` and, if present, apply it to round state *and strip
+**Step 1 — consume `--voice` and `--owners` first (they are modifiers, not modes).** Before
+selecting a mode, scan `$ARGUMENTS` for each and, if present, apply it to round state *and strip
 it from `$ARGUMENTS`* so the leftover flags select the mode cleanly. There is no argparse
 path for this — `scripts/pr_scan.py` is a scanner and never touches
 `.pr-watch-state.json`; you read and write that file yourself, exactly as you already do
@@ -50,6 +52,16 @@ for `started_at`, `backlog_done`, `roster`, and `queue`.
 | `--voice off` | delete both `voice_rotation` and `voice_cursor` | continue to Step 2 |
 | `--voice list` | read only — write nothing | print the rotation with the next entry (`voice_cursor % len`) marked, then **stop**; this is terminal, it never falls through to a review |
 | absent | leave both keys untouched — **never** reset them | continue to Step 2 |
+
+| Form | Do this to `.pr-watch-state.json` | Then |
+|---|---|---|
+| `--owners a,b` | split on `,`, trim, drop empties → write as `owners[]` | continue to Step 2 |
+| `--owners default` | delete `owners` (back to the built-in three) | continue to Step 2 |
+| absent | leave `owners` untouched — **never** reset it | continue to Step 2 |
+
+Owner scope persists for the same reason the rotation does: a narrowed scope that a bare
+`/pr-watch` silently widened would review — and spend reviewer budget on — every owner.
+Print the effective owner list at the top of every pass so the scope is never a surprise.
 
 Write the state file before dispatching anything. The "absent" row is the load-bearing
 one: a bare `/pr-watch` carries **no arguments**, so a pass that rewrote state from empty
@@ -96,7 +108,7 @@ to tell "done" from "no verdict" has broken the loop it feeds.
 
 Run and show the table, then stop — no team, no posting:
 ```bash
-python3 scripts/pr_scan.py scan --owners mriechers,public-media-work,Wonder-Cabinet-Productions --limit 30
+python3 scripts/pr_scan.py scan --owners <owners> --limit 100
 ```
 Summarize per PR: `repo #num · action · needs_attention · title`.
 
@@ -133,7 +145,7 @@ does not.
 
 1. **Scan:**
    ```bash
-   python3 scripts/pr_scan.py scan --owners <owners> --limit 30
+   python3 scripts/pr_scan.py scan --owners <owners> --limit 100
    ```
    On the **first pass of the session**, if `.pr-watch-state.json` has no `started_at`,
    record one now (`date -u +%Y-%m-%dT%H:%M:%SZ`). It is the baseline that separates PRs
@@ -217,7 +229,7 @@ does not.
 
 1. **Scan for uncovered PRs:**
    ```bash
-   python3 scripts/pr_scan.py scan --owners <owners> --limit 30 --backlog
+   python3 scripts/pr_scan.py scan --owners <owners> --limit 100 --backlog
    ```
    (`--backlog` filters to `needs_attention: true` — not draft, not opted out, no agent
    feedback yet.)
@@ -255,8 +267,10 @@ Persist to `<worktree-root>/.pr-watch-state.json` and read it each pass; git-exc
 { "started_at": "2026-07-16T12:00:00Z", "backlog_done": true,
   "roster": { "mriechers/the-lodge#12": "rv-mriechers-the-lodge-12" },
   "queue": ["public-media-work/pbswi#22", "mriechers/homelab#28"],
-  "voice_rotation": ["terse senior engineer", "dry and amused"], "voice_cursor": 7 }
+  "voice_rotation": ["terse senior engineer", "dry and amused"], "voice_cursor": 7,
+  "owners": ["public-media-work"] }
 ```
+`owners[]` is set by `--owners`; absent = the three default owners.
 `voice_rotation[]` + `voice_cursor` drive `--voice`; both absent = default voice. The cursor
 is a running count of styled reviews, so it keeps advancing across passes and sessions.
 `queue[]` holds first-reviews that overflowed the cap (oldest-first, `repo#num`); it drains
@@ -290,7 +304,13 @@ Report the current cycle without changing anything — post nothing to GitHub:
   with a different prompt, on demand.
 - **Not because CI is unavailable.** That premise was measured false: 777 private Actions
   minutes against a 3,000/month allowance, never once exhausted. What actually stopped on
-  2026-08-05 was Copilot's AI credits, which is a different product.
+  2026-08-05 was Copilot's AI credits, which is a different product. **Exception, from
+  2026-11-19:** public-media-work used its whole allowance (3,664 Actions minutes in
+  November by the billing API). Hosted jobs there now fail in about 3 s with "spending
+  limit needs to be increased", so until the allowance resets or the budget is raised, this
+  skill is the only Claude review those PRs get. Narrow it with
+  `--owners public-media-work` and choose backlog PRs one by one. Each one starts a Sonnet
+  reviewer, which draws on your Claude usage limits.
 - **Not for:** driving your own PR to merge (that's `/ship-pr`), or merging (human-owned).
 
 ## Running under another agent (Gemini, Codex, …)
@@ -301,7 +321,7 @@ shell. Only the *orchestration* above uses Claude Code primitives — `TeamCreat
 `Agent()` / `SendMessage` (the persistent per-PR teammates).
 Without those, run the **inline** equivalent — same behavior, no teammates:
 
-1. `python3 scripts/pr_scan.py scan --owners <owners> --limit 30` → JSON records.
+1. `python3 scripts/pr_scan.py scan --owners <owners> --limit 100` → JSON records.
 2. On the first run, record `started_at` (the baseline) in `.pr-watch-state.json` yourself.
 3. For each record: `current` → skip. `new` → adopt only if it's not a draft/opted-out and
    it's genuinely new (`created_at > started_at`) or already in your roster; `changed` →
