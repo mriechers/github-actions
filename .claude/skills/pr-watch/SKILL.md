@@ -1,11 +1,11 @@
 ---
 name: pr-watch
 description: >
-  Local reviewer half of /ship-pr. Manually invoked: scans open PRs across your GitHub
-  orgs and spawns one persistent Sonnet reviewer teammate per PR to post agent feedback.
-  A deliberate second opinion alongside the claude-code-action reviewer, not a substitute
-  for it — run it when you want an off-CI read on a specific PR. Triggers on "pr watch",
-  "watch my PRs", "review incoming PRs".
+  The default PR reviewer. Scans open PRs across your GitHub orgs, run by hand or on a
+  cron, and spawns one persistent Sonnet reviewer teammate per PR to post feedback, then
+  messages the authoring agent. The hosted claude-code-action review runs only when the
+  `claude-review` label is added. Triggers on "pr watch", "watch my PRs", "review
+  incoming PRs".
 ---
 
 # PR Watch — local reviewer
@@ -15,11 +15,13 @@ open PRs and dispatches each to a persistent **Sonnet reviewer teammate** that p
 feedback, then messages the authoring agent session when it can identify one (§ Author
 messaging). One invocation is one pass — it does not schedule itself.
 
-> **This is not the automatic reviewer.** `claude-review.yml` is, on every repo, via the
-> `mriechers-pr-reviewer` App. This skill is the deliberate, local second opinion you
-> reach for; nothing invokes it on your behalf. The two skills never
-call each other — they ping-pong through the PR itself (a `/ship-pr` push moves the head
-SHA → the Leader notices → the teammate re-reviews).
+> **This is the default reviewer.** Since the 2026-11-24 e38512b fleet sweep, the hosted
+> `claude-review.yml` (through the `mriechers-pr-reviewer` App) runs **only when the
+> `claude-review` label is added**, not on PR open. Use that label when you want the hosted
+> read as well. pr-watch and `/ship-pr` never call each other. They take turns through
+> the PR itself (a push moves the head SHA → the Leader notices → the teammate
+> re-reviews), and, when the author is known, through agent messages (§ Author
+> messaging).
 
 **Arguments:** `$ARGUMENTS`
 
@@ -179,8 +181,8 @@ does not.
    - `action == "new"` → decide whether to **adopt** (first-review) this PR:
      1. **Skip if `is_draft` or `opted_out`** — never first-review a draft or a
         `no-pr-watch` PR. Do **not** gate on `needs_attention` here: a PR the Action
-        already reviewed still gets a pr-watch review, because pr-watch is the Action's
-        stand-in and re-reviews the new commits the Action no longer does.
+        already reviewed still gets a pr-watch review: the hosted review is label-only
+        now and doesn't re-review new commits on its own.
      2. **If the PR is already in the roster**, a teammate is in-flight. If that teammate
         is still alive, **skip** — do not spawn a second (prevents a duplicate review in
         the window before the first comment/marker lands). If the roster entry exists but
@@ -356,8 +358,8 @@ Report the current cycle without changing anything — post nothing to GitHub:
 
 ## When to use / not
 
-- **Use:** you want a local, off-CI second read on incoming PRs — a different reviewer
-  with a different prompt, on demand.
+- **Use:** as the standing reviewer for an owner scope, on a cron or by hand. Add the
+  `claude-review` label to a PR when you also want the hosted read.
 - **Not because CI is unavailable.** That premise was measured false: 777 private Actions
   minutes against a 3,000/month allowance, never once exhausted. What actually stopped on
   2026-08-05 was Copilot's AI credits, which is a different product. **Exception, from
@@ -386,9 +388,10 @@ Without those, run the **inline** equivalent — same behavior, no teammates:
    SHA). You are the reviewer — no sub-agent needed. If `voice_rotation[]` is set in round
    state, select and advance the cursor yourself (see § Voice rotation) and apply
    `prompts/reviewer.md` § Voice — including its invariants.
-4. Re-run when you want another pass. Do not wrap this in a scheduler: the automatic
-   reviewer is `claude-review.yml`, and a second unattended writer on the same PR is the
-   condition this skill was deliberately taken out of.
+4. Re-run when you want another pass. A fixed-interval cron is fine (see § Typical use).
+   Don't add a **second** unattended writer: one scheduled pr-watch per owner scope.
+   If the hosted review is also on a PR (`claude-review` label), two automatic reviewers
+   are posting to it. Pick one.
 
 Dedup, backlog flagging, and the marker contract are identical across harnesses because
 they live in `pr_scan.py` and the PR thread, not in any agent runtime. Per
