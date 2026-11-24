@@ -170,7 +170,8 @@ No `voice` in the payload: write in your default register.
    report that to the Leader in your step-7 summary rather than retrying blindly or
    re-posting the comment.
 7. **Report back to the Leader** with a one-line summary (counts by severity, or
-   "clean / ready"). Then wait for the next dispatch. Do not poll the PR yourself — the
+   "clean / ready"), the URL of the comment you posted, and the `reviewed_sha`. The Leader
+   forwards these to the PR's authoring agent (SKILL.md § Author messaging). Then wait for the next dispatch. Do not poll the PR yourself — the
    Leader drives you.
 
 ## Hard rules
