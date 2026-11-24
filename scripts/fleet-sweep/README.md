@@ -22,6 +22,7 @@ network. Hosting it beside the reusables it pins makes that a local check.
 | `sweep.sh` | writes the stubs fleet-wide — **fleet write** |
 | `status.sh` | which repos carry which pin (read-only) |
 | `enrollment-audit.sh` | which repos never got the stubs at all (read-only) |
+| `history-audit.sh` | one-off full-history secrets scan of every in-scope repo, for triage (read-only) |
 | `enroll-one.sh` | prepare one new repo's enrollment; prints the commands (read-only) |
 | `pause.sh` | disable/enable a workflow fleet-wide — **fleet write**, reversible |
 
