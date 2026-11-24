@@ -28,7 +28,7 @@ Universal-applicable, language-agnostic, near-zero cost.
 
 | Check | Tool | Cost |
 |---|---|---|
-| `secrets-scan` | gitleaks-action (full history scan) | ~5s / push |
+| `secrets-scan` | gitleaks CLI, scanning the commits a change adds | ~10s / run, billed as 1 minute |
 | `dependabot` | `.github/dependabot.yml` | passive (opens PRs) |
 
 Even YAML-config repos and dotfiles benefit from this. No code-quality gates here — just *don't ship credentials, don't ignore CVEs*.
@@ -80,12 +80,14 @@ swept file is:
 
 ```yaml
 name: Floor
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main, master]
 jobs:
   floor:
     permissions:
       contents: read
-      pull-requests: write   # gitleaks comments findings on PRs
     uses: mriechers/github-actions/.github/workflows/floor.yml@<sha>  # v1
 ```
 
@@ -193,4 +195,4 @@ Existing repos get migrated according to the rollout plan (`planning/ci-standard
 
 - `README.md` — the reusables this repo hosts, consuming them, and releasing (SHA-pinned)
 - `scripts/fleet-sweep/` — propagation to the fleet
-- `.github/workflows/claude-review.yml` — the Claude Code Action review reusable (opened / ready_for_review / reopened + `claude-review` label)
+- `.github/workflows/claude-review.yml` — the Claude Code Action review reusable (on demand: runs when the `claude-review` label is added)

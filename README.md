@@ -10,8 +10,8 @@ shared workflow.
 
 | File | Purpose | Key inputs |
 |---|---|---|
-| `.github/workflows/floor.yml` | Tier 0 floor — full-history gitleaks secrets scan | `gitleaks-config`, `fetch-depth` (default `0`) |
-| `.github/workflows/claude-review.yml` | Auto Claude review with formal GitHub state | `model` (default `sonnet`), `prompt`, `review_label`, optional `github_app_id` |
+| `.github/workflows/floor.yml` | Tier 0 floor — gitleaks secrets scan of the commits a change adds | `gitleaks-config`, `full-history` (default `false`), `runs-on`, `fetch-depth` (default `0`) |
+| `.github/workflows/claude-review.yml` | Claude review with formal GitHub state, on demand by label | `model` (default `sonnet`), `prompt`, `review_label`, optional `github_app_id` |
 | `.github/workflows/claude-interactive.yml` | Interactive `@claude` on issues/PRs | `model` (default `sonnet`), `claude_args` |
 | `.github/workflows/python-ci.yml` | Tier A Python CI — floor + ruff + pyright + pytest | `python-version` (default `3.11`), `test-paths`, `install-cmd`, `ruff-select`, `pyright-mode`, `run-tests` |
 | `.github/workflows/js-ci.yml` | Tier A JS/TS CI — floor + lint + typecheck + test | `node-version`, `install-cmd`, `lint-cmd`, `test-cmd` |
@@ -44,7 +44,10 @@ credentials*. Nothing is forwarded — gitleaks runs on the caller's own
 
 ```yaml
 name: Floor
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main, master]
 jobs:
   floor:
     permissions:
@@ -68,7 +71,7 @@ Add a caller workflow that forwards the token and grants permissions, e.g.:
 name: Claude Code Review
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, labeled]
+    types: [labeled]
 jobs:
   review:
     permissions:
@@ -82,8 +85,10 @@ jobs:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-The reusable only accepts `opened`, `ready_for_review`, `reopened`, and a
-`labeled` event whose label matches `review_label` (default `claude-review`).
+The fleet stub listens for `labeled` only, so a review runs when the
+`review_label` label (default `claude-review`) is added to a pull request, and
+again each time it is removed and re-added. The reusable also accepts `opened`,
+`ready_for_review` and `reopened` for a caller that wants an automatic review.
 It serializes runs per PR. The `permissions:` block must live in the caller: a
 reusable can only *downgrade* the token it is handed. `id-token: write` is
 required by `anthropics/claude-code-action` to obtain its OIDC token.

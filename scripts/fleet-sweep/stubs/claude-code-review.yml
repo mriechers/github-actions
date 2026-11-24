@@ -1,8 +1,12 @@
 name: Claude Code Review
 
+# On demand: a review runs when the `claude-review` label is added to a pull
+# request, not when one is opened. Review locally first (`/code-review`) and
+# add the label when a pull request deserves a second read. To review again
+# after a push, remove the label and add it back.
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, labeled]
+    types: [labeled]
 
 jobs:
   review:

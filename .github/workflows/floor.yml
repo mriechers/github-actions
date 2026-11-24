@@ -1,8 +1,16 @@
 name: Floor (reusable)
 
-# Workspace-standard Tier 0 "floor": a full-history secrets scan that every
-# non-archived repo in the fleet should run, regardless of language or scale.
-# See docs/ci-standardization.md for the tier model.
+# Workspace-standard Tier 0 "floor": a secrets scan of the commits a change
+# adds, which every non-archived repo in the fleet should run, regardless of
+# language or scale. See docs/ci-standardization.md for the tier model.
+#
+# It scans the change, not all history. The floor used to re-scan full history
+# on every run, so one old finding failed every push from then on: over 60 days
+# that was 485 failed runs, 65 pull requests merged with the floor red, and
+# about 18 default branches left red for a month. A check that is red whatever
+# you push gets ignored, and then it cannot report a new secret either. Old
+# history is audited once, on purpose (`full-history: true`, or gitleaks run
+# locally), and the result is triaged: rotate what is live, allowlist the rest.
 #
 # Why this lives here and not in the-lodge, which is where the tier model is
 # documented: the-lodge is a PRIVATE repo, and a reusable workflow in a private
@@ -14,7 +22,10 @@ name: Floor (reusable)
 # Consumers add .github/workflows/floor.yml:
 #
 #   name: Floor
-#   on: [push, pull_request]
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main, master]
 #   jobs:
 #     floor:
 #       permissions:
@@ -24,9 +35,13 @@ name: Floor (reusable)
 # The permissions block must live in the caller — a reusable can only downgrade
 # the token it is handed, never widen it.
 #
-# Baselining findings the repo cannot fix: a repo whose history carries vendored
-# or third-party material — reviewed on adoption, never hand-edited — has
-# findings no PR can clear, and a permanently red floor is a floor nobody reads.
+# Trigger on pull requests and on pushes to the default branch only. `on:
+# [push, pull_request]` scans every pull-request commit twice and sends two
+# failure emails for one finding.
+#
+# Baselining findings a full-history audit turns up and the repo cannot fix: a
+# repo whose history carries vendored or third-party material — reviewed on
+# adoption, never hand-edited — has findings no PR can clear.
 # Commit a .gitleaks.toml at the repo ROOT and leave gitleaks-config empty; the
 # scan resolves a root config on its own (see the input's description below):
 #
@@ -38,7 +53,7 @@ name: Floor (reusable)
 #   paths = ['''^deployments/[^/]+/vendor/.*''']
 #
 # Prefer path allowlists to a .gitleaksignore of fingerprints. A fingerprint is
-# commit:path:rule:line, so on the full-history scan this floor runs, the same
+# commit:path:rule:line, so on a full-history scan the same
 # content re-appears under every commit that ever touched it: the ignore file
 # grows with history rather than with content, and re-vendoring invalidates it.
 # Measured on one fleet repo, 24 fingerprints covered 16 distinct locations.
@@ -63,18 +78,35 @@ on:
         default: ''
       fetch-depth:
         description: >-
-          Checkout depth. 0 (default) scans full history, which is the point of
-          the floor — a secret that was committed and later removed is still
-          published. Set to 1 only for a repo whose history is known-clean and
-          too large to scan on every push.
+          Checkout depth. 0 (default) fetches full history, so both ends of the
+          commit range being scanned are present. With a shallower checkout the
+          range may be missing, and the scan then covers whatever history was
+          fetched.
         required: false
         type: number
         default: 0
+      full-history:
+        description: >-
+          Scan every commit instead of only the commits this push or pull
+          request adds. For a deliberate one-off audit: a secret that was
+          committed and later removed is still published, and only a full scan
+          finds it.
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        description: >-
+          Runner label. The scan takes seconds and every job bills a whole
+          minute, so a smaller runner is cheaper for the same result.
+        required: false
+        type: string
+        default: ubuntu-latest
 
 jobs:
   secrets-scan:
     name: gitleaks
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -116,10 +148,40 @@ jobs:
       - name: Run gitleaks
         env:
           CONFIG: ${{ inputs.gitleaks-config }}
+          FULL_HISTORY: ${{ inputs.full-history }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           set -euo pipefail
           args=(git . --redact --verbose --exit-code 1)
           if [ -n "$CONFIG" ]; then
             args+=(--config "$CONFIG")
+          fi
+
+          # The commits this event adds: base..head for a pull request,
+          # before..after for a push.
+          from='' to=''
+          if [ "$FULL_HISTORY" != "true" ]; then
+            case "$EVENT_NAME" in
+              pull_request|pull_request_target) from="$PR_BASE" to="$PR_HEAD" ;;
+              push) from="$PUSH_BEFORE" to="$PUSH_AFTER" ;;
+            esac
+          fi
+
+          # Use the range only when both ends are real commits in this
+          # checkout. gitleaks treats a range it cannot resolve as zero commits
+          # and exits 0, which would be a green check that scanned nothing. A
+          # new branch (before is all zeros), a force-push whose old tip is
+          # gone, or any other event therefore gets the full scan.
+          if [ -n "$from" ] && [ -n "$to" ] \
+             && git cat-file -e "${from}^{commit}" 2>/dev/null \
+             && git cat-file -e "${to}^{commit}" 2>/dev/null; then
+            echo "Scanning the commits in ${from}..${to}"
+            args+=("--log-opts=${from}..${to}")
+          else
+            echo "Scanning full history"
           fi
           "$RUNNER_TEMP/gitleaks" "${args[@]}"

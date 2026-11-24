@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A public host for **callable GitHub Actions reusable workflows** (`on: workflow_call`)
 consumed by the `~/Developer` fleet and org repos across separate owners. There is no
-application code, package manager, or test suite — the workflow YAML *is* the product.
+application code or package manager — the workflow YAML *is* the product. The
+Python under `scripts/` and the skills has stdlib `unittest` suites, which `ci.yml` runs.
 
 Public on purpose: no secrets live here (callers forward their own
 `CLAUDE_CODE_OAUTH_TOKEN`), and a public host is the only way repos under different
@@ -32,7 +33,12 @@ Consumers pin a **full commit SHA** (with a `# v1` comment), never the moving ta
 - Keep `model` defaulting to the `sonnet` alias so callers auto-track the latest
   Sonnet. Do not pin a dated model id.
 - `claude-review.yml` guards `labeled` events against `inputs.review_label`; every
-  other trigger always runs. Preserve that shape when touching the `if:`.
+  other trigger it accepts always runs. Preserve that shape when touching the `if:`.
+  The fleet stub listens for `labeled` only, so review is on demand: it runs when
+  the `claude-review` label is added, not when a pull request opens.
+- `floor.yml` scans the commits a change adds, not all history, and its stub runs
+  on pull requests and default-branch pushes only. A check that fails whatever you
+  push gets ignored; keep the floor failing only for what the change itself adds.
 
 ## Releasing (propagation lives in `scripts/fleet-sweep/`)
 
@@ -63,7 +69,8 @@ See `/release-reusable` for the full walkthrough.
 
 ## Verification
 
-There is no local test harness. Validate workflow YAML with `actionlint` (a
+Run the Python suites with `python3 -m unittest discover -s tests` (and each
+`.claude/skills/*/tests`). Validate workflow YAML with `actionlint` (a
 `PostToolUse` hook runs it when Claude Code itself edits files under
 `.github/workflows/` — a local agent gate only, not CI and not a git hook;
 run `actionlint` by hand after any other kind of edit); end-to-end proof

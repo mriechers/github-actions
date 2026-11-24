@@ -2,8 +2,8 @@
 # sweep.sh — point the fleet's Claude workflows and CI floor at these reusables.
 #
 # Sweeps three callers into every in-scope repo: the interactive @claude handler
-# (claude.yml), the auto-reviewer (claude-code-review.yml), and the Tier 0 CI
-# floor (floor.yml, a full-history gitleaks scan).
+# (claude.yml), the on-demand reviewer (claude-code-review.yml), and the Tier 0 CI
+# floor (floor.yml, a gitleaks scan of the commits a change adds).
 #
 # MASS WRITE. Run by Mark via `!` — the classifier blocks agent-run fleet writes.
 # Idempotent: a caller already at the stub's pinned SHA is skipped, so a re-pin

@@ -6,8 +6,8 @@ caller stubs into every in-scope repo across the fleet:
 | Stub | Calls | Purpose |
 |---|---|---|
 | `claude.yml` | `claude-interactive.yml` | the `@claude` handler |
-| `claude-code-review.yml` | `claude-review.yml` | the auto-reviewer |
-| `floor.yml` | `floor.yml` | Tier 0 CI floor — full-history gitleaks scan |
+| `claude-code-review.yml` | `claude-review.yml` | the reviewer, on demand by label |
+| `floor.yml` | `floor.yml` | Tier 0 CI floor — gitleaks scan of the commits a change adds |
 
 Moved here from `the-lodge/scripts/claude-workflow-migration/` on 2026-09-02.
 It lived in a repo that ADR 0008 declares superseded, was absent from that
@@ -22,6 +22,7 @@ network. Hosting it beside the reusables it pins makes that a local check.
 | `sweep.sh` | writes the stubs fleet-wide — **fleet write** |
 | `status.sh` | which repos carry which pin (read-only) |
 | `enrollment-audit.sh` | which repos never got the stubs at all (read-only) |
+| `history-audit.sh` | one-off full-history secrets scan of every in-scope repo, for triage (read-only) |
 | `enroll-one.sh` | prepare one new repo's enrollment; prints the commands (read-only) |
 | `pause.sh` | disable/enable a workflow fleet-wide — **fleet write**, reversible |
 
@@ -50,9 +51,9 @@ found by accident.
 costs one directory listing per repo, and reports repos with none of the stubs,
 repos with some, repos that have all three but no `CLAUDE_CODE_OAUTH_TOKEN`
 (inert -- the workflows run and error), and sweep PRs left open on protected
-repos. `.github/workflows/
-fleet-enrollment-audit.yml` runs it weekly and files a single issue when there
-is anything to report.
+repos. Run it by hand when you want the answer. A weekly workflow used to run
+it, but that needed a token that was never configured, so it failed every week
+from the day it was added and was removed.
 
 The *acting* half stays manual on purpose. A scheduled job that re-pins ~89
 repos is exactly what the "Mark runs it via `!`" gate exists to prevent, so the

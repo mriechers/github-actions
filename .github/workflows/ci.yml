@@ -29,6 +29,14 @@ jobs:
           done
           exit "$status"
 
+  # The floor reusable, run on this repo's own changes. The swept stub cannot
+  # live here (its filename is the reusable's), so this is the only place a
+  # change to floor.yml is exercised before it is pinned and swept.
+  floor:
+    uses: ./.github/workflows/floor.yml
+    with:
+      runs-on: ubuntu-slim
+
   actionlint:
     runs-on: ubuntu-latest
     steps:

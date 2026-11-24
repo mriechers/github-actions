@@ -153,13 +153,19 @@ push-back count feeds the guardrail (see below).
 - `git push`.
 
 ### 6. Re-trigger and reply
-- **The review Action is comment-triggered, not push-triggered.** On these repos a
-  fresh push alone does *not* re-run the reviewer — you must post `@claude please
-  review`. (A queued `claude-review` check that sits `pending` for minutes after a
-  push is the tell that it's waiting for the mention.) Always post the mention.
-- Fold it into a short reply that lists what you fixed (with the commit SHA) and what
-  you pushed back on and why, ending with `@claude please review`. That one comment
-  both re-triggers the review and leaves the paper trail the next round reads.
+- **The review Action is label-triggered, and on demand.** It runs when the
+  `claude-review` label is added to the PR. It does not run when a PR is opened, and
+  a push does not re-run it. To request a review, or another one after a push, remove
+  the label if it is there and add it back:
+  `gh pr edit <n> --repo <r> --remove-label claude-review` then
+  `gh pr edit <n> --repo <r> --add-label claude-review`. Adding a label that is
+  already present fires no event.
+- **Do not post `@claude please review`.** The mention starts the interactive agent,
+  which has push access and never updates the `review:*` label (see GOTCHAS.md).
+- Post a short reply that lists what you fixed (with the commit SHA) and what you
+  pushed back on and why. That comment is the paper trail the next round reads.
+- Review locally first. A hosted review costs Actions minutes and is worth requesting
+  when a PR deserves a second read, not on every round.
 
 ### 7. Wait for the re-review
 The review job takes ~2–3 min. Under `/loop`, end the turn (schedule the heartbeat);
