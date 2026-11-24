@@ -19,7 +19,7 @@
 # claude-code-review.yml and justified it as an inert no-op, because that
 # workflow had been retired fleet-wide on 2026-07-30. It was restored on
 # 2026-08-06 and the default was never revisited — so a bare run would now
-# disable the fleet's auto-reviewer everywhere. A default that changed meaning
+# disable the fleet's reviewer everywhere. A default that changed meaning
 # underneath its own comment should not have one.
 set -uo pipefail
 

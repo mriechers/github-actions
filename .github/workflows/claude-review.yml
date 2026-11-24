@@ -45,7 +45,9 @@ on:
 jobs:
   claude-review:
     # Callers choose the event trigger, but this reusable accepts only the review
-    # lifecycle events and its configured manual label.
+    # lifecycle events and its configured manual label. The fleet stub listens
+    # for `labeled` alone, so reviews there are on demand; a caller that also
+    # listens for `opened` gets an automatic review.
     if: >-
       github.event_name == 'pull_request' &&
       (
@@ -56,6 +58,9 @@ jobs:
       ) &&
       github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
+    # A review that has not finished in 15 minutes is not going to: without a
+    # cap the job could run to GitHub's 6-hour limit on the caller's minutes.
+    timeout-minutes: 15
     concurrency:
       group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -279,7 +284,7 @@ jobs:
             Do not include labels: the deterministic publisher owns GitHub-visible
             label state.
           claude_args: >-
-            --model ${{ inputs.model }} --json-schema
+            --model ${{ inputs.model }} --max-turns 60 --json-schema
             '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes","comment","inconclusive"]},"summary":{"type":"string","minLength":1},"findings":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","minLength":1},"severity":{"type":"string","enum":["High","Medium","Low","Nit"]},"path":{"type":"string","minLength":1},"summary":{"type":"string","minLength":1}},"required":["id","severity","path","summary"],"additionalProperties":false}}},"required":["verdict","summary"],"additionalProperties":false}'
 
       - name: Validate machine-readable review result
