@@ -128,6 +128,8 @@ No `voice` in the payload: write in your default register.
        "findings": [
            {"id": "pr:<pr_number>:<slug>", "severity": "<High|Medium|Low|Nit>",
             "path": "<changed path>", "summary": "<one line>", "status": "open"},
+           # status is one of: open, fixed, contested, deferred, superseded, redesign.
+           # On a re-review, a resolved finding is "fixed" ("resolved" raises).
        ],
        "reviewed_at": now}))
    PY
@@ -143,7 +145,9 @@ No `voice` in the payload: write in your default register.
    BODY
    ```
    `pr_record.serialize` refuses malformed records — if it raises, fix your fields
-   rather than posting anyway. The `reviewed_sha` MUST be the real 40-hex head you
+   rather than posting anyway. Generate the markers **before** posting and stop if that
+   step fails: don't chain the generation and the `gh pr comment` with `;`. A comment posted
+   without its markers isn't counted as a review of that SHA, so the PR gets reviewed again. The `reviewed_sha` MUST be the real 40-hex head you
    reviewed; a placeholder fails the dedup parse and the PR is re-reviewed every tick.
    (Older comments may carry the legacy `<!-- pr-watch: sha=... -->` marker; the scanner
    still reads those, but you always emit v1 records.)
